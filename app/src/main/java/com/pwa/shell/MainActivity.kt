@@ -3,47 +3,59 @@ package com.pwa.shell
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import com.pwa.shell.data.local.PwaEntity
+import com.pwa.shell.ui.HomeScreen
+import com.pwa.shell.ui.MainViewModel
+import com.pwa.shell.ui.PwaWebViewScreen
 import com.pwa.shell.ui.theme.PwaShellTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Directly instantiate the MainViewModel with application context
+        val viewModel = MainViewModel(applicationContext)
+
         setContent {
             PwaShellTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    PlaceholderScreen()
+                    var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
+
+                    when (val screen = currentScreen) {
+                        is Screen.Home -> {
+                            HomeScreen(
+                                viewModel = viewModel,
+                                onPwaClick = { pwa ->
+                                    currentScreen = Screen.WebView(pwa)
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        is Screen.WebView -> {
+                            PwaWebViewScreen(
+                                pwa = screen.pwa,
+                                onBackToHome = {
+                                    currentScreen = Screen.Home
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-@Composable
-fun PlaceholderScreen() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text = "PWA Shell")
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun PlaceholderScreenPreview() {
-    PwaShellTheme {
-        PlaceholderScreen()
-    }
+sealed interface Screen {
+    object Home : Screen
+    data class WebView(val pwa: PwaEntity) : Screen
 }
