@@ -15,8 +15,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
@@ -195,14 +195,14 @@ fun PwaWebViewScreen(
                     onClick = { webView?.goBack() },
                     enabled = canGoBack
                 ) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Go Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Go Back")
                 }
 
                 IconButton(
                     onClick = { webView?.goForward() },
                     enabled = canGoForward
                 ) {
-                    Icon(Icons.Default.ArrowForward, contentDescription = "Go Forward")
+                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Go Forward")
                 }
 
                 IconButton(

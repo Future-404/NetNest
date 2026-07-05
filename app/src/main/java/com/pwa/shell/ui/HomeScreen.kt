@@ -274,10 +274,6 @@ fun PwaGridItem(
                             contentScale = ContentScale.Fit
                         )
                     } else {
-                        // Letter fallback with gradient backgrounds based on PWA name
-                        val fallbackBrush = Brush.linearGradient(
-                            colors = listOf(themeColor.copy(alpha = 0.8f), themeColor)
-                        )
                         Surface(
                             modifier = Modifier.fillMaxSize(),
                             color = themeColor,
@@ -347,7 +343,7 @@ fun PwaGridItem(
                         }
                     )
                 }
-                Divider()
+                HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Delete", color = Color.Red) },
                     onClick = {
