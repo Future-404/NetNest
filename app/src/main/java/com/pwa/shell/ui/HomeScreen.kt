@@ -79,7 +79,7 @@ fun HomeScreen(
         ) {
             if (pwas.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxSize().statusBarsPadding(),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -94,8 +94,7 @@ fun HomeScreen(
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(4), // 4 columns per row
                     modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding(), // Immersive padding under system bar
+                        .fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)

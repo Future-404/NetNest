@@ -9,6 +9,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import com.pwa.shell.data.local.PwaEntity
 import com.pwa.shell.ui.HomeScreen
 import com.pwa.shell.ui.MainViewModel
@@ -35,13 +39,20 @@ class MainActivity : ComponentActivity() {
 
                     when (val screen = currentScreen) {
                         is Screen.Home -> {
-                            HomeScreen(
-                                viewModel = viewModel,
-                                onPwaClick = { pwa ->
-                                    currentScreen = Screen.WebView(pwa)
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            // Apply status bars padding globally in MainActivity to avoid top overlap
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .windowInsetsPadding(WindowInsets.statusBars)
+                            ) {
+                                HomeScreen(
+                                    viewModel = viewModel,
+                                    onPwaClick = { pwa ->
+                                        currentScreen = Screen.WebView(pwa)
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                         is Screen.WebView -> {
                             PwaWebViewScreen(

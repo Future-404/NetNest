@@ -10,6 +10,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -34,6 +35,7 @@ fun PwaWebViewScreen(
 ) {
     val context = LocalContext.current
     val view = LocalView.current
+    val darkTheme = isSystemInDarkTheme()
     var webView: WebView? by remember { mutableStateOf(null) }
 
     // File Chooser Callback for <input type="file">
@@ -69,13 +71,11 @@ fun PwaWebViewScreen(
     }
 
     // Immersive status bar control
-    val originalStatusBarColor = remember { (context as? Activity)?.window?.statusBarColor }
-
     DisposableEffect(pwa) {
         val activity = context as? Activity
         val window = activity?.window
         if (window != null) {
-            // Enable edge-to-edge layout under status bar
+            // Keep edge-to-edge layout false
             WindowCompat.setDecorFitsSystemWindows(window, false)
             
             // Set status bar background color
@@ -89,8 +89,12 @@ fun PwaWebViewScreen(
 
         onDispose {
             window?.let { w ->
-                WindowCompat.setDecorFitsSystemWindows(w, true)
-                originalStatusBarColor?.let { w.statusBarColor = it }
+                // Restore default transparent system bars
+                w.statusBarColor = android.graphics.Color.TRANSPARENT
+                w.navigationBarColor = android.graphics.Color.TRANSPARENT
+                val controller = WindowCompat.getInsetsController(w, view)
+                controller.isAppearanceLightStatusBars = !darkTheme
+                controller.isAppearanceLightNavigationBars = !darkTheme
             }
         }
     }
