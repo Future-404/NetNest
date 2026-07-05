@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
-import coil.request.ImageLoader
+import coil.ImageLoader
 import coil.request.ImageRequest
 import com.pwa.shell.data.local.PwaEntity
 import java.io.File
