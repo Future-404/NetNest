@@ -186,9 +186,9 @@ fun HomeScreen(
                 ManualAddDialog(
                     initialUrl = failedUrl,
                     onDismiss = { showManualAddDialog = null },
-                    onConfirm = { name, url, theme ->
+                    onConfirm = { name, url, theme, useChromeUa ->
                         showManualAddDialog = null
-                        viewModel.addPwaManually(name, url, "", theme)
+                        viewModel.addPwaManually(name, url, "", theme, useChromeUa)
                     }
                 )
             }
@@ -198,9 +198,9 @@ fun HomeScreen(
                 EditPwaDialog(
                     pwa = pwa,
                     onDismiss = { showEditDialog = null },
-                    onConfirm = { updatedName, updatedUrl, updatedTheme ->
+                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa ->
                         showEditDialog = null
-                        viewModel.updatePwa(pwa.copy(name = updatedName, url = updatedUrl, themeColor = updatedTheme))
+                        viewModel.updatePwa(pwa.copy(name = updatedName, url = updatedUrl, themeColor = updatedTheme, useChromeUa = useChromeUa))
                     }
                 )
             }
@@ -387,11 +387,12 @@ fun AddPwaDialog(
 fun ManualAddDialog(
     initialUrl: String,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf(initialUrl) }
     var themeColor by remember { mutableStateOf("#6200EE") }
+    var useChromeUa by remember { mutableStateOf(true) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -399,7 +400,7 @@ fun ManualAddDialog(
             TextButton(
                 onClick = {
                     if (name.isNotBlank() && url.isNotBlank()) {
-                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() })
+                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa)
                     }
                 }
             ) {
@@ -436,6 +437,20 @@ fun ManualAddDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("Standard Chrome User-Agent", style = MaterialTheme.typography.bodyMedium)
+                        Text("Strips '; wv' to prevent functionality degradation.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = useChromeUa,
+                        onCheckedChange = { useChromeUa = it }
+                    )
+                }
             }
         }
     )
@@ -445,11 +460,12 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(pwa.name) }
     var url by remember { mutableStateOf(pwa.url) }
     var themeColor by remember { mutableStateOf(pwa.themeColor ?: "") }
+    var useChromeUa by remember { mutableStateOf(pwa.useChromeUa) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -457,7 +473,7 @@ fun EditPwaDialog(
             TextButton(
                 onClick = {
                     if (name.isNotBlank() && url.isNotBlank()) {
-                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() })
+                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa)
                     }
                 }
             ) {
@@ -494,6 +510,20 @@ fun EditPwaDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("Standard Chrome User-Agent", style = MaterialTheme.typography.bodyMedium)
+                        Text("Strips '; wv' to prevent functionality degradation.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = useChromeUa,
+                        onCheckedChange = { useChromeUa = it }
+                    )
+                }
             }
         }
     )

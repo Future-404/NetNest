@@ -4,16 +4,14 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.os.Message
+import android.webkit.*
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
@@ -108,15 +106,91 @@ fun PwaWebViewScreen(
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
-                    configureSettings(this)
+                    // Enable remote web debugging for developer diagnostic profiling
+                    WebView.setWebContentsDebuggingEnabled(true)
+
+                    // Accept cookies & third party cookies configuration
+                    CookieManager.getInstance().apply {
+                        setAcceptCookie(true)
+                        setAcceptThirdPartyCookies(this@apply, true)
+                    }
+
+                    configureSettings(this, pwa.useChromeUa)
                     
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
+                            // Flush cookies immediately to ensure persistence
+                            CookieManager.getInstance().flush()
+                        }
+
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            request: WebResourceRequest?
+                        ): Boolean {
+                            val url = request?.url?.toString() ?: return false
+                            return handleUrlRedirection(view, url)
+                        }
+
+                        @Deprecated("Deprecated in Java")
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            url: String?
+                        ): Boolean {
+                            if (url == null) return false
+                            return handleUrlRedirection(view, url)
                         }
                     }
 
                     webChromeClient = object : WebChromeClient() {
+                        // Forward window.open popup requests back to the primary WebView
+                        override fun onCreateWindow(
+                            view: WebView?,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: Message?
+                        ): Boolean {
+                            val mainWebView = view ?: return false
+                            val tempWebView = WebView(mainWebView.context).apply {
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView?,
+                                        request: WebResourceRequest?
+                                    ): Boolean {
+                                        val url = request?.url?.toString()
+                                        if (url != null) {
+                                            mainWebView.loadUrl(url)
+                                        }
+                                        return true
+                                    }
+                                    @Deprecated("Deprecated in Java")
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView?,
+                                        url: String?
+                                    ): Boolean {
+                                        if (url != null) {
+                                            mainWebView.loadUrl(url)
+                                        }
+                                        return true
+                                    }
+                                }
+                            }
+                            val transport = resultMsg?.obj as? WebView.WebViewTransport
+                            if (transport != null) {
+                                transport.webView = tempWebView
+                                resultMsg.sendToTarget()
+                                return true
+                            }
+                            return false
+                        }
+
+                        // Web API Permission request bridge (Camera, Mic, Location)
+                        override fun onPermissionRequest(request: PermissionRequest?) {
+                            val resources = request?.resources ?: return
+                            request.grant(resources)
+                        }
+
+                        // Input type="file" callback launcher
                         override fun onShowFileChooser(
                             webView: WebView?,
                             filePathCallback: ValueCallback<Array<Uri>>?,
@@ -150,19 +224,48 @@ fun PwaWebViewScreen(
 }
 
 @SuppressLint("SetJavaScriptEnabled")
-private fun configureSettings(webView: WebView) {
+private fun configureSettings(webView: WebView, useChromeUa: Boolean) {
     webView.settings.apply {
         javaScriptEnabled = true
         domStorageEnabled = true
         databaseEnabled = true
-        useWideViewPort = true
-        loadWithOverviewMode = true
+        javaScriptCanOpenWindowsAutomatically = true
+        setSupportMultipleWindows(true) // Required for window.open popups
+        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         allowFileAccess = true
         allowContentAccess = true
+        cacheMode = WebSettings.LOAD_DEFAULT
+        mediaPlaybackRequiresUserGesture = false
+        useWideViewPort = true
+        loadWithOverviewMode = true
         builtInZoomControls = true
         displayZoomControls = false
-        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-        cacheMode = WebSettings.LOAD_DEFAULT
+
+        // Custom User-Agent cleaner logic
+        val defaultUa = userAgentString ?: ""
+        if (useChromeUa && defaultUa.isNotEmpty()) {
+            // Strip WebView signature '; wv' and version code to masquerade as standard mobile Chrome
+            val cleanedUa = defaultUa.replace("Version/4.0 ", "").replace("; wv", "")
+            userAgentString = cleanedUa
+        }
+    }
+}
+
+private fun handleUrlRedirection(view: WebView?, url: String): Boolean {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+        return false // Handled natively inside the WebView
+    }
+    
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        view?.context?.startActivity(intent)
+        return true
+    } catch (e: Exception) {
+        Toast.makeText(view?.context, "No application found to open link: $url", Toast.LENGTH_LONG).show()
+        return true
     }
 }
 
@@ -176,7 +279,7 @@ private fun isColorLight(color: Color): Boolean {
 }
 
 private fun parseHexColor(hex: String?): Color {
-    if (hex.isNullOrEmpty()) return Color(0xFF6200EE) // Default purple
+    if (hex.isNullOrEmpty()) return Color(0xFF6200EE)
     return try {
         val cleaned = hex.trim().replace("#", "")
         if (cleaned.length == 6) {

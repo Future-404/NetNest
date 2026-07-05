@@ -53,7 +53,7 @@ class MainViewModel(context: Context) : ViewModel() {
         }
     }
 
-    fun addPwaManually(name: String, url: String, iconPath: String, themeColor: String?) {
+    fun addPwaManually(name: String, url: String, iconPath: String, themeColor: String?, useChromeUa: Boolean) {
         viewModelScope.launch {
             val pwaEntity = PwaEntity(
                 name = name,
@@ -61,7 +61,8 @@ class MainViewModel(context: Context) : ViewModel() {
                 iconPath = iconPath,
                 themeColor = themeColor,
                 displayOrder = 0,
-                addedTime = System.currentTimeMillis()
+                addedTime = System.currentTimeMillis(),
+                useChromeUa = useChromeUa
             )
             pwaDao.insert(pwaEntity)
             _uiState.value = UiState.Success("PWA added manually")

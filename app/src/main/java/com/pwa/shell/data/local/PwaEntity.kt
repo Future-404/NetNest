@@ -12,5 +12,6 @@ data class PwaEntity(
     val iconPath: String,
     val themeColor: String?,
     val displayOrder: Int,
-    val addedTime: Long
+    val addedTime: Long,
+    val useChromeUa: Boolean = true
 )
