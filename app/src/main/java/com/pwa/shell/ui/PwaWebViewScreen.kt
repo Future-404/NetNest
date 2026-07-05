@@ -13,25 +13,19 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
 import com.pwa.shell.data.local.PwaEntity
+import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PwaWebViewScreen(
     pwa: PwaEntity,
@@ -39,11 +33,8 @@ fun PwaWebViewScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     var webView: WebView? by remember { mutableStateOf(null) }
-    var canGoBack by remember { mutableStateOf(false) }
-    var canGoForward by remember { mutableStateOf(false) }
-    var currentTitle by remember { mutableStateOf(pwa.name) }
-    var currentUrl by remember { mutableStateOf(pwa.url) }
 
     // File Chooser Callback for <input type="file">
     var uploadMessageCallback: ValueCallback<Array<Uri>>? by remember { mutableStateOf(null) }
@@ -67,6 +58,7 @@ fun PwaWebViewScreen(
         uploadMessageCallback = null
     }
 
+    // System Back Button Handling
     BackHandler {
         val wv = webView
         if (wv != null && wv.canGoBack()) {
@@ -76,142 +68,80 @@ fun PwaWebViewScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // Navigation bar
-        TopAppBar(
-            title = {
-                Column {
-                    Text(
-                        text = currentTitle,
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = currentUrl,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            },
-            navigationIcon = {
-                IconButton(onClick = onBackToHome) {
-                    Icon(Icons.Default.Close, contentDescription = "Close PWA")
-                }
-            },
-            actions = {
-                IconButton(
-                    onClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl))
-                        context.startActivity(intent)
-                    }
-                ) {
-                    Icon(Icons.Default.Share, contentDescription = "Open in Browser")
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        )
+    // Immersive status bar control
+    val originalStatusBarColor = remember { (context as? Activity)?.window?.statusBarColor }
 
-        // Web view container
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        configureSettings(this)
-                        
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                super.onPageFinished(view, url)
-                                view?.let {
-                                    canGoBack = it.canGoBack()
-                                    canGoForward = it.canGoForward()
-                                    currentTitle = it.title ?: pwa.name
-                                    currentUrl = it.url ?: pwa.url
-                                }
-                            }
-
-                            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
-                                super.doUpdateVisitedHistory(view, url, isReload)
-                                view?.let {
-                                    canGoBack = it.canGoBack()
-                                    canGoForward = it.canGoForward()
-                                    currentUrl = it.url ?: pwa.url
-                                }
-                            }
-                        }
-
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onShowFileChooser(
-                                webView: WebView?,
-                                filePathCallback: ValueCallback<Array<Uri>>?,
-                                fileChooserParams: FileChooserParams?
-                            ): Boolean {
-                                uploadMessageCallback?.onReceiveValue(null)
-                                uploadMessageCallback = filePathCallback
-
-                                val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
-                                    type = "*/*"
-                                    addCategory(Intent.CATEGORY_OPENABLE)
-                                }
-                                try {
-                                    fileChooserLauncher.launch(intent)
-                                } catch (e: Exception) {
-                                    uploadMessageCallback?.onReceiveValue(null)
-                                    uploadMessageCallback = null
-                                    return false
-                                }
-                                return true
-                            }
-
-                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                super.onProgressChanged(view, newProgress)
-                            }
-                        }
-
-                        loadUrl(pwa.url)
-                        webView = this
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+    DisposableEffect(pwa) {
+        val activity = context as? Activity
+        val window = activity?.window
+        if (window != null) {
+            // Enable edge-to-edge layout under status bar
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            
+            // Set status bar background color
+            val pwaColor = pwa.themeColor?.let { parseHexColor(it) } ?: Color.Transparent
+            window.statusBarColor = pwaColor.toArgb()
+            
+            // Adjust status bar text color based on luminance
+            val isLight = isColorLight(pwaColor)
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = isLight
         }
 
-        // Bottom Web controller controls
-        Surface(
-            tonalElevation = 4.dp,
-            modifier = Modifier.fillMaxWidth().height(56.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                IconButton(
-                    onClick = { webView?.goBack() },
-                    enabled = canGoBack
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Go Back")
-                }
-
-                IconButton(
-                    onClick = { webView?.goForward() },
-                    enabled = canGoForward
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Go Forward")
-                }
-
-                IconButton(
-                    onClick = { webView?.reload() }
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Reload Page")
-                }
+        onDispose {
+            window?.let { w ->
+                WindowCompat.setDecorFitsSystemWindows(w, true)
+                originalStatusBarColor?.let { w.statusBarColor = it }
             }
         }
+    }
+
+    // Full screen web container
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    configureSettings(this)
+                    
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                        }
+                    }
+
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onShowFileChooser(
+                            webView: WebView?,
+                            filePathCallback: ValueCallback<Array<Uri>>?,
+                            fileChooserParams: FileChooserParams?
+                        ): Boolean {
+                            uploadMessageCallback?.onReceiveValue(null)
+                            uploadMessageCallback = filePathCallback
+
+                            val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                                type = "*/*"
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                            }
+                            try {
+                                fileChooserLauncher.launch(intent)
+                            } catch (e: Exception) {
+                                uploadMessageCallback?.onReceiveValue(null)
+                                uploadMessageCallback = null
+                                return false
+                            }
+                            return true
+                        }
+                    }
+
+                    loadUrl(pwa.url)
+                    webView = this
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
 
@@ -229,5 +159,33 @@ private fun configureSettings(webView: WebView) {
         displayZoomControls = false
         mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         cacheMode = WebSettings.LOAD_DEFAULT
+    }
+}
+
+private fun isColorLight(color: Color): Boolean {
+    if (color.alpha < 0.1f) return false
+    val red = color.red
+    val green = color.green
+    val blue = color.blue
+    val luminance = 0.299f * red + 0.587f * green + 0.114f * blue
+    return luminance > 0.5f
+}
+
+private fun parseHexColor(hex: String?): Color {
+    if (hex.isNullOrEmpty()) return Color(0xFF6200EE) // Default purple
+    return try {
+        val cleaned = hex.trim().replace("#", "")
+        if (cleaned.length == 6) {
+            Color(android.graphics.Color.parseColor("#$cleaned"))
+        } else if (cleaned.length == 3) {
+            val r = cleaned[0].toString().repeat(2)
+            val g = cleaned[1].toString().repeat(2)
+            val b = cleaned[2].toString().repeat(2)
+            Color(android.graphics.Color.parseColor("#$r$g$b"))
+        } else {
+            Color(android.graphics.Color.parseColor(hex))
+        }
+    } catch (e: Exception) {
+        Color(0xFF6200EE)
     }
 }
