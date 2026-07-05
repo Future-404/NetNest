@@ -61,7 +61,7 @@ fun HomeScreen(
             TopAppBar(
                 title = {
                     Text(
-                        "PWA Shell Portal",
+                        "NetNest Portal",
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )

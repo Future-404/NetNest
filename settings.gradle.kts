@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PwaShell"
+rootProject.name = "NetNest"
 include(":app")

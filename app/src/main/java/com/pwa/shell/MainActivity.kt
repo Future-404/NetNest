@@ -12,7 +12,7 @@ import com.pwa.shell.data.local.PwaEntity
 import com.pwa.shell.ui.HomeScreen
 import com.pwa.shell.ui.MainViewModel
 import com.pwa.shell.ui.PwaWebViewScreen
-import com.pwa.shell.ui.theme.PwaShellTheme
+import com.pwa.shell.ui.theme.NetNestTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
         val viewModel = MainViewModel(applicationContext)
 
         setContent {
-            PwaShellTheme {
+            NetNestTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
