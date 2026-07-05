@@ -1,6 +1,7 @@
 package com.pwa.shell.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -9,13 +10,11 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -27,12 +26,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
-import coil.ImageLoader
+import coil.request.ImageLoader
 import coil.request.ImageRequest
 import com.pwa.shell.data.local.PwaEntity
 import java.io.File
+import kotlin.math.abs
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
@@ -45,7 +45,7 @@ fun HomeScreen(
 
     var showAddDialog by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf<PwaEntity?>(null) }
-    var showManualAddDialog by remember { mutableStateOf<String?>(null) } // holds failed URL
+    var showManualAddDialog by remember { mutableStateOf<String?>(null) }
 
     // Configure Coil ImageLoader with SVG support
     val imageLoader = remember {
@@ -57,29 +57,19 @@ fun HomeScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        "NetNest Portal",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            )
-        },
+        topBar = {}, // Removed top bar for edge-to-edge immersion
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showAddDialog = true },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                shape = RoundedCornerShape(16.dp),
+                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 2.dp)
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Add PWA")
             }
         },
+        containerColor = Color(0xFFF5F5F3), // Light neutral warm-gray background
         modifier = modifier
     ) { paddingValues ->
         Box(
@@ -89,23 +79,26 @@ fun HomeScreen(
         ) {
             if (pwas.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().statusBarsPadding(),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No PWAs added yet.\nTap the '+' button to add your first web app!",
+                        text = "No web apps added yet.\nTap '+' to create your customized net desktop!",
                         textAlign = TextAlign.Center,
-                        color = Color.Gray,
-                        lineHeight = 20.sp
+                        color = Color(0xFF7D7A76),
+                        fontSize = 14.sp,
+                        lineHeight = 22.sp
                     )
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    columns = GridCells.Fixed(4), // 4 columns per row
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding(), // Immersive padding under system bar
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
                     itemsIndexed(pwas, key = { _, pwa -> pwa.id }) { index, pwa ->
                         PwaGridItem(
@@ -132,7 +125,7 @@ fun HomeScreen(
                 }
             }
 
-            // Handle Global UI states
+            // Global UI state overlays
             when (val state = uiState) {
                 is UiState.Loading -> {
                     AlertDialog(
@@ -230,86 +223,69 @@ fun PwaGridItem(
     onMove: (Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val themeColor = parseHexColor(pwa.themeColor)
+    val softColor = remember(pwa.url) { getSoftColor(pwa.url) }
 
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(0.85f)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = { expanded = true }
-            ),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            )
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                // Icon Container
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .padding(2.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (pwa.iconPath.isNotEmpty() && File(pwa.iconPath).exists()) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(File(pwa.iconPath))
-                                .crossfade(true)
-                                .build(),
-                            imageLoader = imageLoader,
-                            contentDescription = pwa.name,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit
-                        )
-                    } else {
-                        Surface(
-                            modifier = Modifier.fillMaxSize(),
-                            color = themeColor,
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = pwa.name.take(1).uppercase(),
-                                    fontSize = 28.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Name
+        // Flat Desktop Icon Box (iOS/Android Modern Style)
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(RoundedCornerShape(20.dp)) // iOS Squircle style
+                .background(softColor),
+            contentAlignment = Alignment.Center
+        ) {
+            if (pwa.iconPath.isNotEmpty() && File(pwa.iconPath).exists()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(File(pwa.iconPath))
+                        .crossfade(true)
+                        .build(),
+                    imageLoader = imageLoader,
+                    contentDescription = pwa.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                // Consistent soft colored placeholder showing first uppercase character
                 Text(
-                    text = pwa.name,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
+                    text = pwa.name.take(1).uppercase(),
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF49454F).copy(alpha = 0.8f)
                 )
             }
+        }
 
-            // Dropdown Menu
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Title Label
+        Text(
+            text = pwa.name,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Normal,
+            color = Color(0xFF333333),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 2.dp)
+        )
+
+        // Dropdown options
+        Box(modifier = Modifier.size(0.dp)) {
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                offset = DpOffset(x = 10.dp, y = (-40).dp)
+                offset = DpOffset(x = (-30).dp, y = (-20).dp)
             ) {
                 DropdownMenuItem(
                     text = { Text("Edit") },
@@ -387,7 +363,7 @@ fun AddPwaDialog(
         title = { Text("Add New PWA") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Enter the website URL. The app will fetch PWA manifest automatically.")
+                Text("Enter the website URL. NetNest will automatically parse the PWA manifest.")
                 OutlinedTextField(
                     value = url,
                     onValueChange = {
@@ -524,8 +500,28 @@ fun EditPwaDialog(
     )
 }
 
-fun parseHexColor(hex: String?): Color {
-    if (hex.isNullOrEmpty()) return Color(0xFF6200EE) // Default purple
+// Generate consistent soft/pastel colors based on URL hashing
+private fun getSoftColor(url: String): Color {
+    val softColors = listOf(
+        Color(0xFFFFD2D2), // soft peach-pink
+        Color(0xFFFFE3D2), // soft apricot
+        Color(0xFFFFF2D2), // soft cream-yellow
+        Color(0xFFE2F0D9), // soft light-green
+        Color(0xFFD9F2E6), // soft mint
+        Color(0xFFD9EAF2), // soft pastel-blue
+        Color(0xFFE6D9F2), // soft lilac
+        Color(0xFFF2D9E6), // soft rose
+        Color(0xFFECEFF1), // soft blue-gray
+        Color(0xFFEFEBE9)  // soft clay-gray
+    )
+    if (url.isEmpty()) return Color(0xFFECEFF1)
+    val hash = abs(url.hashCode())
+    val index = hash % softColors.size
+    return softColors[index]
+}
+
+private fun parseHexColor(hex: String?): Color {
+    if (hex.isNullOrEmpty()) return Color(0xFF6200EE)
     return try {
         val cleaned = hex.trim().replace("#", "")
         if (cleaned.length == 6) {
