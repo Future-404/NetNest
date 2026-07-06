@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Message
+import android.util.Log
 import android.webkit.*
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -122,6 +123,30 @@ fun PwaWebViewScreen(
                             CookieManager.getInstance().flush()
                         }
 
+                        override fun onReceivedError(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            error: WebResourceError?
+                        ) {
+                            super.onReceivedError(view, request, error)
+                            Log.e(
+                                "WebViewError",
+                                "Failed to load resource: ${request?.url} Error: ${error?.description}"
+                            )
+                        }
+
+                        override fun onReceivedHttpError(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            errorResponse: WebResourceResponse?
+                        ) {
+                            super.onReceivedHttpError(view, request, errorResponse)
+                            Log.e(
+                                "WebViewError",
+                                "HTTP error ${errorResponse?.statusCode} for ${request?.url}: ${errorResponse?.reasonPhrase}"
+                            )
+                        }
+
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: WebResourceRequest?
@@ -141,6 +166,14 @@ fun PwaWebViewScreen(
                     }
 
                     webChromeClient = object : WebChromeClient() {
+                        override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                            Log.d(
+                                "WebViewConsole",
+                                "${consoleMessage?.message()} (at ${consoleMessage?.sourceId()}:${consoleMessage?.lineNumber()})"
+                            )
+                            return true
+                        }
+
                         // Forward window.open popup requests back to the primary WebView
                         override fun onCreateWindow(
                             view: WebView?,
@@ -149,33 +182,9 @@ fun PwaWebViewScreen(
                             resultMsg: Message?
                         ): Boolean {
                             val mainWebView = view ?: return false
-                            val tempWebView = WebView(mainWebView.context).apply {
-                                webViewClient = object : WebViewClient() {
-                                    override fun shouldOverrideUrlLoading(
-                                        view: WebView?,
-                                        request: WebResourceRequest?
-                                    ): Boolean {
-                                        val url = request?.url?.toString()
-                                        if (url != null) {
-                                            mainWebView.loadUrl(url)
-                                        }
-                                        return true
-                                    }
-                                    @Deprecated("Deprecated in Java")
-                                    override fun shouldOverrideUrlLoading(
-                                        view: WebView?,
-                                        url: String?
-                                    ): Boolean {
-                                        if (url != null) {
-                                            mainWebView.loadUrl(url)
-                                        }
-                                        return true
-                                    }
-                                }
-                            }
                             val transport = resultMsg?.obj as? WebView.WebViewTransport
                             if (transport != null) {
-                                transport.webView = tempWebView
+                                transport.webView = mainWebView
                                 resultMsg.sendToTarget()
                                 return true
                             }
@@ -240,7 +249,7 @@ private fun configureSettings(webView: WebView, useChromeUa: Boolean) {
         displayZoomControls = false
 
         // Custom User-Agent cleaner logic
-        val defaultUa = userAgentString ?: ""
+        val defaultUa = WebSettings.getDefaultUserAgent(webView.context)
         if (useChromeUa && defaultUa.isNotEmpty()) {
             // Strip WebView signature '; wv' and version code to masquerade as standard mobile Chrome
             val cleanedUa = defaultUa.replace("Version/4.0 ", "").replace("; wv", "")
