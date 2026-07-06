@@ -110,10 +110,8 @@ fun PwaWebViewScreen(
                     WebView.setWebContentsDebuggingEnabled(true)
 
                     // Accept cookies & third party cookies configuration
-                    CookieManager.getInstance().apply {
-                        setAcceptCookie(true)
-                        setAcceptThirdPartyCookies(this@apply, true)
-                    }
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
                     configureSettings(this, pwa.useChromeUa)
                     
