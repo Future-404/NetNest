@@ -474,7 +474,8 @@ private fun configureSettings(webView: WebView, useChromeUa: Boolean) {
 }
 
 private fun handleUrlRedirection(view: WebView?, url: String): Boolean {
-    if (url.startsWith("http://") || url.startsWith("https://")) {
+    if (url.startsWith("http://") || url.startsWith("https://") || 
+        url.startsWith("about:") || url.startsWith("data:") || url.startsWith("blob:")) {
         return false // Handled natively inside the WebView
     }
     
