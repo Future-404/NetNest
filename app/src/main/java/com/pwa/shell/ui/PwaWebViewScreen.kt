@@ -336,7 +336,7 @@ fun PwaWebViewScreen(
                             return true
                         }
 
-                        // Forward window.open popup requests back to the primary WebView
+                        // Handle window.open popups using a temporary background WebView
                         override fun onCreateWindow(
                             view: WebView?,
                             isDialog: Boolean,
@@ -344,12 +344,66 @@ fun PwaWebViewScreen(
                             resultMsg: Message?
                         ): Boolean {
                             val mainWebView = view ?: return false
+                            val context = mainWebView.context
+                            val tempWebView = WebView(context)
+                            
+                            // Configure settings to match main WebView
+                            configureSettings(tempWebView, pwa.useChromeUa)
+                            
+                            tempWebView.webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    tempView: WebView?,
+                                    request: WebResourceRequest?
+                                ): Boolean {
+                                    val url = request?.url?.toString() ?: return false
+                                    // Redirect HTTP/HTTPS navigations back to the main WebView
+                                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                                        mainWebView.loadUrl(url)
+                                        tempView?.destroy()
+                                        return true
+                                    }
+                                    // Handle custom schemes (e.g., intent:, mailto:) externally
+                                    val handled = handleUrlRedirection(tempView, url)
+                                    if (handled) {
+                                        tempView?.destroy()
+                                    }
+                                    return handled
+                                }
+
+                                @Deprecated("Deprecated in Java")
+                                override fun shouldOverrideUrlLoading(
+                                    tempView: WebView?,
+                                    url: String?
+                                ): Boolean {
+                                    if (url == null) return false
+                                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                                        mainWebView.loadUrl(url)
+                                        tempView?.destroy()
+                                        return true
+                                    }
+                                    val handled = handleUrlRedirection(tempView, url)
+                                    if (handled) {
+                                        tempView?.destroy()
+                                    }
+                                    return handled
+                                }
+
+                                override fun onPageFinished(tempView: WebView?, url: String?) {
+                                    super.onPageFinished(tempView, url)
+                                    // Clean up temporary WebView if it's just a blank popup
+                                    if (url == "about:blank") {
+                                        tempView?.destroy()
+                                    }
+                                }
+                            }
+                            
                             val transport = resultMsg?.obj as? WebView.WebViewTransport
                             if (transport != null) {
-                                transport.webView = mainWebView
+                                transport.webView = tempWebView
                                 resultMsg.sendToTarget()
                                 return true
                             }
+                            tempWebView.destroy()
                             return false
                         }
 
