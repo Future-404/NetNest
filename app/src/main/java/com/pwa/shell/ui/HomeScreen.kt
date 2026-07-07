@@ -108,7 +108,6 @@ fun HomeScreen(
                             onClick = { onPwaClick(pwa) },
                             onDelete = { viewModel.deletePwa(pwa) },
                             onEdit = { showEditDialog = pwa },
-                            onRefresh = { viewModel.refreshPwaIcon(pwa, context) },
                             onMove = { direction ->
                                 val mutablePwas = pwas.toMutableList()
                                 val targetIndex = index + direction
@@ -218,7 +217,6 @@ fun PwaGridItem(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
-    onRefresh: () -> Unit,
     onMove: (Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -293,13 +291,7 @@ fun PwaGridItem(
                         onEdit()
                     }
                 )
-                DropdownMenuItem(
-                    text = { Text("刷新图标") },
-                    onClick = {
-                        expanded = false
-                        onRefresh()
-                    }
-                )
+
                 if (index > 0) {
                     DropdownMenuItem(
                         text = { Text("左移") },

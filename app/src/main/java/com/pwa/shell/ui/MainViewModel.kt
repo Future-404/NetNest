@@ -89,32 +89,7 @@ class MainViewModel(context: Context) : ViewModel() {
         }
     }
 
-    fun refreshPwaIcon(pwa: PwaEntity, context: Context) {
-        viewModelScope.launch {
-            _uiState.value = UiState.Loading("正在刷新图标...")
-            try {
-                val result = fetcher.fetchPwaInfo(pwa.url)
-                val localIconPath = result.iconUrl?.let { downloader.downloadIcon(context, it) } ?: ""
-                if (localIconPath.isNotEmpty()) {
-                    // Delete old icon
-                    if (pwa.iconPath.isNotEmpty()) {
-                        File(pwa.iconPath).delete()
-                    }
-                    val updated = pwa.copy(
-                        name = result.name,
-                        iconPath = localIconPath,
-                        themeColor = result.themeColor ?: pwa.themeColor
-                    )
-                    pwaDao.update(updated)
-                    _uiState.value = UiState.Success("图标已刷新")
-                } else {
-                    _uiState.value = UiState.Success("未找到新图标")
-                }
-            } catch (e: Exception) {
-                _uiState.value = UiState.Success("刷新失败：${e.message}")
-            }
-        }
-    }
+
 
     fun reorderPwas(pwas: List<PwaEntity>) {
         viewModelScope.launch {
