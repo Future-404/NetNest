@@ -505,6 +505,20 @@ private fun injectSecuritySandbox(webView: WebView) {
            if (window.__netnest_sandbox_injected) return;
            window.__netnest_sandbox_injected = true;
 
+           function serializeBody(body) {
+               if (!body) return "";
+               if (typeof body === "string") return body;
+               if (body instanceof URLSearchParams) return body.toString();
+               if (body instanceof FormData) {
+                   var parts = [];
+                   for (let [key, val] of body.entries()) {
+                       parts.push(key + "=" + (typeof val === "string" ? val : "[File/Blob]"));
+                   }
+                   return parts.join("&");
+               }
+               return String(body);
+           }
+
            // 1. Intercept fetch
            const originalFetch = window.fetch;
            window.fetch = async function(input, init) {
@@ -513,7 +527,7 @@ private fun injectSecuritySandbox(webView: WebView) {
                const body = (init && init.body) || '';
                
                if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
-                   const decision = window.NetNestSecurity.auditRequest(url, method, String(body));
+                   const decision = window.NetNestSecurity.auditRequest(url, method, serializeBody(body));
                    if (decision === 'BLOCK') {
                        console.warn('[NetNest Sandbox] Blocked upload to: ' + url);
                        throw new TypeError('Failed to fetch: Request blocked by NetNest Security Sandbox.');
@@ -538,7 +552,7 @@ private fun injectSecuritySandbox(webView: WebView) {
                const reqBody = body || '';
                
                if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
-                   const decision = window.NetNestSecurity.auditRequest(url, method, String(reqBody));
+                   const decision = window.NetNestSecurity.auditRequest(url, method, serializeBody(reqBody));
                    if (decision === 'BLOCK') {
                        console.warn('[NetNest Sandbox] Blocked XHR upload to: ' + url);
                        const errEvent = new ProgressEvent('error');
@@ -555,7 +569,7 @@ private fun injectSecuritySandbox(webView: WebView) {
                navigator.sendBeacon = function(url, data) {
                    const reqBody = data || '';
                    if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
-                       const decision = window.NetNestSecurity.auditRequest(url, 'POST', String(reqBody));
+                       const decision = window.NetNestSecurity.auditRequest(url, 'POST', serializeBody(reqBody));
                        if (decision === 'BLOCK') {
                            console.warn('[NetNest Sandbox] Blocked sendBeacon upload to: ' + url);
                            return false;
@@ -573,6 +587,8 @@ class SecurityBridge(
     private val pwa: PwaEntity,
     private val onShowBlockDialog: (urlAndLeakType: String, callback: (Boolean) -> Unit) -> Unit
 ) {
+    private val dialogLock = Any()
+
     @android.webkit.JavascriptInterface
     fun auditRequest(url: String, method: String, body: String): String {
         if (pwa.securityMode == 0) return "ALLOW"
@@ -617,27 +633,28 @@ class SecurityBridge(
             return "ALLOW"
         }
 
-        // Block silently
-        if (pwa.securityMode == 2) {
-            return "BLOCK"
+        synchronized(dialogLock) {
+            // Block silently
+            if (pwa.securityMode == 2) {
+                return "BLOCK"
+            }
+
+            // Show dialog and block thread
+            var isAllowed = false
+            val latch = java.util.concurrent.CountDownLatch(1)
+
+            onShowBlockDialog("$host ($leakType)") { allowed ->
+                isAllowed = allowed
+                latch.countDown()
+            }
+
+            try {
+                latch.await()
+            } catch (e: InterruptedException) {
+                // Default to block
+            }
+
+            return if (isAllowed) "ALLOW" else "BLOCK"
         }
-
-        // Show dialog and block thread
-        var isAllowed = false
-        val latch = java.util.concurrent.CountDownLatch(1)
-
-        onShowBlockDialog("$host ($leakType)") { allowed ->
-            isAllowed = allowed
-            latch.countDown()
-        }
-
-        try {
-            latch.await()
-        } catch (e: InterruptedException) {
-            // Default to block
-        }
-
-        return if (isAllowed) "ALLOW" else "BLOCK"
     }
 }
-
