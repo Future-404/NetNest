@@ -2,6 +2,8 @@ package com.pwa.shell.ui
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.os.Message
@@ -60,7 +62,7 @@ fun PwaWebViewScreen(
     var blockedUrl by remember { mutableStateOf("") }
     var currentCallback by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
     LaunchedEffect(pwa.useFullscreen) {
-        val activity = context as? Activity
+        val activity = context.findActivity()
         val window = activity?.window
         if (window != null) {
             val controller = WindowCompat.getInsetsController(window, view)
@@ -68,14 +70,18 @@ fun PwaWebViewScreen(
             if (pwa.useFullscreen) {
                 controller.hide(WindowInsetsCompat.Type.statusBars())
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    window.attributes.layoutInDisplayCutoutMode = 
+                    val attrs = window.attributes
+                    attrs.layoutInDisplayCutoutMode = 
                         android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    window.attributes = attrs
                 }
             } else {
                 controller.show(WindowInsetsCompat.Type.statusBars())
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    window.attributes.layoutInDisplayCutoutMode = 
+                    val attrs = window.attributes
+                    attrs.layoutInDisplayCutoutMode = 
                         android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    window.attributes = attrs
                 }
             }
         }
@@ -115,7 +121,7 @@ fun PwaWebViewScreen(
 
     // Immersive status bar control
     DisposableEffect(pwa) {
-        val activity = context as? Activity
+        val activity = context.findActivity()
         val window = activity?.window
         if (window != null && !pwa.useFullscreen) {
             // Keep edge-to-edge layout false
@@ -136,8 +142,10 @@ fun PwaWebViewScreen(
                 w.statusBarColor = android.graphics.Color.TRANSPARENT
                 w.navigationBarColor = android.graphics.Color.TRANSPARENT
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    w.attributes.layoutInDisplayCutoutMode = 
+                    val attrs = w.attributes
+                    attrs.layoutInDisplayCutoutMode = 
                         android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    w.attributes = attrs
                 }
                 val controller = WindowCompat.getInsetsController(w, view)
                 controller.isAppearanceLightStatusBars = !darkTheme
@@ -502,7 +510,7 @@ private fun updateStatusBarFromWeb(view: WebView, useFullscreen: Boolean) {
         }
 
         if (parsedColor != null && !useFullscreen) {
-            val activity = view.context as? Activity
+            val activity = view.context.findActivity()
             val window = activity?.window
             if (window != null) {
                 window.statusBarColor = parsedColor.toArgb()
@@ -671,4 +679,13 @@ class SecurityBridge(
             return if (isAllowed) "ALLOW" else "BLOCK"
         }
     }
+}
+
+private fun Context.findActivity(): Activity? {
+    var currentContext = this
+    while (currentContext is ContextWrapper) {
+        if (currentContext is Activity) return currentContext
+        currentContext = currentContext.baseContext
+    }
+    return null
 }
