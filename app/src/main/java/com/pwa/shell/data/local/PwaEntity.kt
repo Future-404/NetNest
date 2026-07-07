@@ -13,5 +13,6 @@ data class PwaEntity(
     val themeColor: String?,
     val displayOrder: Int,
     val addedTime: Long,
-    val useChromeUa: Boolean = true
+    val useChromeUa: Boolean = true,
+    val useDevConsole: Boolean = false
 )

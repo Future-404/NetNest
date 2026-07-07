@@ -186,9 +186,9 @@ fun HomeScreen(
                 ManualAddDialog(
                     initialUrl = failedUrl,
                     onDismiss = { showManualAddDialog = null },
-                    onConfirm = { name, url, theme, useChromeUa ->
+                    onConfirm = { name, url, theme, useChromeUa, useDevConsole ->
                         showManualAddDialog = null
-                        viewModel.addPwaManually(name, url, "", theme, useChromeUa)
+                        viewModel.addPwaManually(name, url, "", theme, useChromeUa, useDevConsole)
                     }
                 )
             }
@@ -198,9 +198,9 @@ fun HomeScreen(
                 EditPwaDialog(
                     pwa = pwa,
                     onDismiss = { showEditDialog = null },
-                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa ->
+                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole ->
                         showEditDialog = null
-                        viewModel.updatePwa(pwa.copy(name = updatedName, url = updatedUrl, themeColor = updatedTheme, useChromeUa = useChromeUa))
+                        viewModel.updatePwa(pwa.copy(name = updatedName, url = updatedUrl, themeColor = updatedTheme, useChromeUa = useChromeUa, useDevConsole = useDevConsole))
                     }
                 )
             }
@@ -387,12 +387,13 @@ fun AddPwaDialog(
 fun ManualAddDialog(
     initialUrl: String,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf(initialUrl) }
     var themeColor by remember { mutableStateOf("#6200EE") }
     var useChromeUa by remember { mutableStateOf(true) }
+    var useDevConsole by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -400,7 +401,7 @@ fun ManualAddDialog(
             TextButton(
                 onClick = {
                     if (name.isNotBlank() && url.isNotBlank()) {
-                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa)
+                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa, useDevConsole)
                     }
                 }
             ) {
@@ -451,6 +452,20 @@ fun ManualAddDialog(
                         onCheckedChange = { useChromeUa = it }
                     )
                 }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("In-App DevConsole", style = MaterialTheme.typography.bodyMedium)
+                        Text("Injects vConsole to debug Console and Storage inside App.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = useDevConsole,
+                        onCheckedChange = { useDevConsole = it }
+                    )
+                }
             }
         }
     )
@@ -460,12 +475,13 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(pwa.name) }
     var url by remember { mutableStateOf(pwa.url) }
     var themeColor by remember { mutableStateOf(pwa.themeColor ?: "") }
     var useChromeUa by remember { mutableStateOf(pwa.useChromeUa) }
+    var useDevConsole by remember { mutableStateOf(pwa.useDevConsole) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -473,7 +489,7 @@ fun EditPwaDialog(
             TextButton(
                 onClick = {
                     if (name.isNotBlank() && url.isNotBlank()) {
-                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa)
+                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa, useDevConsole)
                     }
                 }
             ) {
@@ -522,6 +538,20 @@ fun EditPwaDialog(
                     Switch(
                         checked = useChromeUa,
                         onCheckedChange = { useChromeUa = it }
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("In-App DevConsole", style = MaterialTheme.typography.bodyMedium)
+                        Text("Injects vConsole to debug Console and Storage inside App.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = useDevConsole,
+                        onCheckedChange = { useDevConsole = it }
                     )
                 }
             }

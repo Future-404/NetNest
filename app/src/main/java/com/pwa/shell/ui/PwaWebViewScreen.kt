@@ -121,6 +121,24 @@ fun PwaWebViewScreen(
                             super.onPageFinished(view, url)
                             // Flush cookies immediately to ensure persistence
                             CookieManager.getInstance().flush()
+
+                            // Dynamically inject Tencent vConsole in-app debugger if enabled
+                            if (pwa.useDevConsole) {
+                                val injectScript = """
+                                    (function() {
+                                        if (window.vConsole || window.VConsole) return;
+                                        var script = document.createElement('script');
+                                        script.src = 'https://unpkg.com/vconsole@latest/dist/vconsole.min.js';
+                                        script.onload = function() {
+                                            try {
+                                                window.vConsole = new window.VConsole();
+                                            } catch(e) {}
+                                        };
+                                        document.body.appendChild(script);
+                                    })();
+                                """.trimIndent()
+                                view?.evaluateJavascript(injectScript, null)
+                            }
                         }
 
                         override fun onReceivedError(
