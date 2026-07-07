@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Message
 import android.util.Log
 import android.webkit.*
+import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -107,6 +108,10 @@ fun PwaWebViewScreen(
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
                     // Enable remote web debugging for developer diagnostic profiling
                     WebView.setWebContentsDebuggingEnabled(true)
 
