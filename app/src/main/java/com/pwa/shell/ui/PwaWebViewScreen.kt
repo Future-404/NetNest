@@ -24,6 +24,22 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.ui.unit.dp
 import com.pwa.shell.data.local.PwaEntity
 import java.io.File
 
@@ -37,6 +53,21 @@ fun PwaWebViewScreen(
     val view = LocalView.current
     val darkTheme = isSystemInDarkTheme()
     var webView: WebView? by remember { mutableStateOf(null) }
+    var isStatusBarVisible by remember { mutableStateOf(true) }
+
+    LaunchedEffect(isStatusBarVisible) {
+        val activity = context as? Activity
+        val window = activity?.window
+        if (window != null) {
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (isStatusBarVisible) {
+                controller.show(WindowInsetsCompat.Type.statusBars())
+            } else {
+                controller.hide(WindowInsetsCompat.Type.statusBars())
+            }
+        }
+    }
 
     // File Chooser Callback for <input type="file">
     var uploadMessageCallback: ValueCallback<Array<Uri>>? by remember { mutableStateOf(null) }
@@ -95,6 +126,7 @@ fun PwaWebViewScreen(
                 val controller = WindowCompat.getInsetsController(w, view)
                 controller.isAppearanceLightStatusBars = !darkTheme
                 controller.isAppearanceLightNavigationBars = !darkTheme
+                controller.show(WindowInsetsCompat.Type.statusBars())
             }
         }
     }
@@ -260,6 +292,31 @@ fun PwaWebViewScreen(
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Floating Status Bar Toggle Button
+        IconButton(
+            onClick = { isStatusBarVisible = !isStatusBarVisible },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(top = 16.dp, end = 16.dp)
+                .size(36.dp)
+                .background(
+                    color = Color.Black.copy(alpha = 0.3f),
+                    shape = CircleShape
+                ),
+            colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+        ) {
+            Icon(
+                imageVector = if (isStatusBarVisible) {
+                    Icons.Default.KeyboardArrowUp
+                } else {
+                    Icons.Default.KeyboardArrowDown
+                },
+                contentDescription = "切换通知栏",
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }
 
