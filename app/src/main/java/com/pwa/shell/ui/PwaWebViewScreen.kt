@@ -714,32 +714,17 @@ private fun injectSecuritySandbox(webView: WebView) {
                };
            }
 
-            // 4. Override script integrity to bypass self-destruction checks
-            let originalIntegrity = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'integrity');
-            if (!originalIntegrity) {
-                originalIntegrity = {
-                    get: function() { return this.getAttribute('integrity') || ''; },
-                    set: function(val) { this.setAttribute('integrity', val); },
-                    configurable: true,
-                    enumerable: true
-                };
-            }
-            if (originalIntegrity.configurable) {
-                Object.defineProperty(HTMLScriptElement.prototype, 'integrity', {
-                    get: function() {
-                        if (this.src && this.src.indexOf('bin/official/game.js') !== -1) {
-                            return 'sha384-ngl0x1KklyLMaduYM03CuTqlVPtBvC8OAMN7U4SAp30+mBuGXJP2pcNkaZw4oyJx';
-                        }
-                        return originalIntegrity.get ? originalIntegrity.get.call(this) : '';
-                    },
-                    set: function(val) {
-                        if (originalIntegrity.set) {
-                            originalIntegrity.set.call(this, val);
-                        }
-                    },
-                    configurable: true
-                });
-            }
+            // 4. Override script integrity to bypass self-destruction checks dynamically
+            Object.defineProperty(HTMLScriptElement.prototype, 'integrity', {
+                get: function() {
+                    return this.getAttribute('integrity') || '';
+                },
+                set: function(val) {
+                    this.setAttribute('integrity', val);
+                },
+                configurable: true,
+                enumerable: true
+            });
        })();
     """.trimIndent()
     webView.evaluateJavascript(js, null)
