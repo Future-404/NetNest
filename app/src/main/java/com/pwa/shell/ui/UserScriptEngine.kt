@@ -67,62 +67,85 @@ object MatchPatternMatcher {
     }
 }
 
-fun buildInjectionScript(scripts: List<UserScriptEntity>): String {
+fun buildInjectionScript(scripts: List<UserScriptEntity>, phase: RunAt): String {
     val bridgeDefinitions = """
-        window.GM_addStyle = function(css) {
-            const style = document.createElement('style');
-            style.textContent = css;
-            document.head.appendChild(style);
-            return style;
-        };
-        window.GM_setValue = function(key, value) {
-            if (window.NetNestScriptBridge) {
-                window.NetNestScriptBridge.setValue(String(key), JSON.stringify(value));
-            }
-        };
-        window.GM_getValue = function(key, defaultValue) {
-            if (window.NetNestScriptBridge) {
-                const raw = window.NetNestScriptBridge.getValue(String(key));
-                return (raw !== undefined && raw !== null) ? JSON.parse(raw) : defaultValue;
-            }
-            return defaultValue;
-        };
-        window.GM_deleteValue = function(key) {
-            if (window.NetNestScriptBridge) {
-                window.NetNestScriptBridge.deleteValue(String(key));
-            }
-        };
-        window.GM_listValues = function() {
-            if (window.NetNestScriptBridge) {
-                return JSON.parse(window.NetNestScriptBridge.listKeys());
-            }
-            return [];
-        };
         (function() {
-            if (window.__netnest_console_hooked) return;
-            window.__netnest_console_hooked = true;
-            ['log', 'warn', 'error'].forEach(level => {
-                const original = console[level];
-                console[level] = function(...args) {
-                    if (window.NetNestScriptBridge && window.NetNestScriptBridge.reportLog) {
-                        window.NetNestScriptBridge.reportLog(level, args.map(String).join(' '));
+            const bridge = window.NetNestScriptBridge;
+            if (bridge) {
+                delete window.NetNestScriptBridge; // Hide bridge from site scripts
+            }
+            window.__netnest_injected_scripts = window.__netnest_injected_scripts || {};
+
+            window.GM_addStyle = function(css) {
+                const style = document.createElement('style');
+                style.textContent = css;
+                (document.head || document.documentElement).appendChild(style);
+                return style;
+            };
+            window.GM_setValue = function(key, value) {
+                if (bridge) {
+                    const valStr = value !== undefined ? JSON.stringify(value) : "null";
+                    bridge.setValue(String(key), valStr);
+                }
+            };
+            window.GM_getValue = function(key, defaultValue) {
+                if (bridge) {
+                    const raw = bridge.getValue(String(key));
+                    try {
+                        return (raw !== undefined && raw !== null) ? JSON.parse(raw) : defaultValue;
+                    } catch(e) {
+                        return raw !== undefined && raw !== null ? raw : defaultValue;
                     }
-                    original.apply(console, args);
-                };
-            });
+                }
+                return defaultValue;
+            };
+            window.GM_deleteValue = function(key) {
+                if (bridge) {
+                    bridge.deleteValue(String(key));
+                }
+            };
+            window.GM_listValues = function() {
+                if (bridge) {
+                    return JSON.parse(bridge.listKeys());
+                }
+                return [];
+            };
+            
+            if (!window.__netnest_console_hooked) {
+                window.__netnest_console_hooked = true;
+                ['log', 'warn', 'error'].forEach(level => {
+                    const original = console[level];
+                    console[level] = function(...args) {
+                        if (bridge && bridge.reportLog) {
+                            bridge.reportLog(level, args.map(String).join(' '));
+                        }
+                        original.apply(console, args);
+                    };
+                });
+            }
+
+            window.__netnest_run_script = function(id, name, runFn) {
+                const key = id + "_" + "${phase.name}";
+                if (!window.__netnest_injected_scripts[key]) {
+                    window.__netnest_injected_scripts[key] = true;
+                    try {
+                        runFn();
+                    } catch(e) {
+                        console.error("[NetNest][" + name + "] 执行出错:", e);
+                    }
+                }
+            };
         })();
     """.trimIndent()
 
     val body = scripts.joinToString("\n") { script ->
         """
-        try {
+        window.__netnest_run_script(${script.id}, "${script.name.replace("\"", "\\\"")}", function() {
             ${script.code}
-        } catch (e) {
-            console.error("[NetNest][${script.name.replace("\"", "\\\"")}] 执行出错:", e);
-        }
+        });
         """.trimIndent()
     }
-    return "(function(){\n$bridgeDefinitions\n$body\n})();"
+    return bridgeDefinitions + "\n" + body
 }
 
 class NetNestScriptBridge(
@@ -168,15 +191,18 @@ data class ScriptLogEntry(
 
 object ScriptLogCollector {
     val logs = mutableStateListOf<ScriptLogEntry>()
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
     fun addLog(level: String, message: String) {
-        if (logs.size >= 100) {
-            logs.removeAt(0)
+        handler.post {
+            if (logs.size >= 100) {
+                logs.removeAt(0)
+            }
+            logs.add(ScriptLogEntry(level, message))
         }
-        logs.add(ScriptLogEntry(level, message))
     }
 
     fun clear() {
-        logs.clear()
+        handler.post { logs.clear() }
     }
 }

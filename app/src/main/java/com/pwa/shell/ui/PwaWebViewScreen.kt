@@ -83,9 +83,15 @@ fun PwaWebViewScreen(
                 it.enabled && MatchPatternMatcher.matches(url, it.matchPatterns) && it.runAt == phase
             }
             if (phaseScripts.isNotEmpty()) {
-                val compiledJs = buildInjectionScript(phaseScripts)
                 withContext(Dispatchers.Main) {
-                    view.evaluateJavascript(compiledJs, null)
+                    val currentUrl = view.url ?: ""
+                    val stillMatching = phaseScripts.filter {
+                        MatchPatternMatcher.matches(currentUrl, it.matchPatterns)
+                    }
+                    if (stillMatching.isNotEmpty()) {
+                        val compiledJs = buildInjectionScript(stillMatching, phase)
+                        view.evaluateJavascript(compiledJs, null)
+                    }
                 }
             }
         }

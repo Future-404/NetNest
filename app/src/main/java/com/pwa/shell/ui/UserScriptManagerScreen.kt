@@ -19,6 +19,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -110,18 +112,10 @@ fun UserScriptManagerScreen(
         ScriptFullScreenEditor(
             initial = editingScript!!,
             onSave = { updated ->
-                var result: Result<Unit> = Result.success(Unit)
-                coroutineScope.launch(Dispatchers.IO) {
-                    try {
-                        userScriptDao.update(updated)
-                        withContext(Dispatchers.Main) {
-                            editingScript = null
-                        }
-                    } catch (e: Exception) {
-                        result = Result.failure(e)
-                    }
+                runCatching {
+                    userScriptDao.update(updated)
+                    editingScript = null
                 }
-                result
             },
             onCancel = { editingScript = null },
             onTestRun = onTestRun
@@ -135,7 +129,7 @@ fun UserScriptManagerScreen(
                 title = { Text("脚本管理 - ${pwa.name}") },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
@@ -217,9 +211,7 @@ fun UserScriptManagerScreen(
                                             enabled = index > 0,
                                             onClick = {
                                                 coroutineScope.launch(Dispatchers.IO) {
-                                                    val prev = scripts[index - 1]
-                                                    userScriptDao.update(prev.copy(sortOrder = script.sortOrder))
-                                                    userScriptDao.update(script.copy(sortOrder = prev.sortOrder))
+                                                    swapScriptsOrder(userScriptDao, scripts, index, index - 1)
                                                 }
                                             }
                                         ) {
@@ -230,9 +222,7 @@ fun UserScriptManagerScreen(
                                             enabled = index < scripts.size - 1,
                                             onClick = {
                                                 coroutineScope.launch(Dispatchers.IO) {
-                                                    val next = scripts[index + 1]
-                                                    userScriptDao.update(next.copy(sortOrder = script.sortOrder))
-                                                    userScriptDao.update(script.copy(sortOrder = next.sortOrder))
+                                                    swapScriptsOrder(userScriptDao, scripts, index, index + 1)
                                                 }
                                             }
                                         ) {
@@ -256,7 +246,7 @@ fun UserScriptManagerScreen(
                                             .fillMaxWidth()
                                             .padding(top = 8.dp)
                                     ) {
-                                        Divider()
+                                        HorizontalDivider()
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text("运行时机: ${script.runAt}", style = MaterialTheme.typography.bodyMedium)
                                         Text("导入来源: ${script.importSource}", style = MaterialTheme.typography.bodyMedium)
@@ -329,7 +319,7 @@ fun UserScriptManagerScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Default.List, contentDescription = null)
+                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("从本地文件导入 (.js)")
                     }
@@ -593,7 +583,7 @@ fun UserScriptManagerScreen(
 @Composable
 fun ScriptFullScreenEditor(
     initial: UserScriptEntity,
-    onSave: (UserScriptEntity) -> Result<Unit>,
+    onSave: suspend (UserScriptEntity) -> Result<Unit>,
     onCancel: () -> Unit,
     onTestRun: ((String) -> Unit)? = null
 ) {
@@ -611,9 +601,11 @@ fun ScriptFullScreenEditor(
                         value = name,
                         onValueChange = { name = it },
                         singleLine = true,
-                        colors = TextFieldDefaults.outlinedTextFieldColors(
+                        colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color.Transparent,
-                            unfocusedBorderColor = Color.Transparent
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
                         ),
                         textStyle = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         modifier = Modifier.fillMaxWidth()
@@ -626,18 +618,24 @@ fun ScriptFullScreenEditor(
                 },
                 actions = {
                     IconButton(onClick = {
-                        val parsed = parseUserScriptMeta(code)
-                        val updated = initial.copy(
-                            name = name,
-                            code = parsed.code,
-                            rawSource = code,
-                            matchPatterns = parsed.matchPatterns ?: initial.matchPatterns,
-                            runAt = parsed.runAt ?: initial.runAt,
-                            updatedAt = System.currentTimeMillis()
-                        )
-                        val res = onSave(updated)
-                        res.onFailure {
-                            saveError = "保存失败：可能存在同名脚本，请修改名称"
+                        coroutineScope.launch {
+                            val updatedRaw = updateMetaName(code, name)
+                            val parsed = parseUserScriptMeta(updatedRaw)
+                            val updated = initial.copy(
+                                name = name,
+                                code = parsed.code,
+                                rawSource = updatedRaw,
+                                matchPatterns = parsed.matchPatterns ?: initial.matchPatterns,
+                                runAt = parsed.runAt ?: initial.runAt,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                            val res = onSave(updated)
+                            res.onSuccess {
+                                saveError = null
+                            }
+                            res.onFailure {
+                                saveError = "保存失败：可能存在同名脚本，请修改名称"
+                            }
                         }
                     }) {
                         Icon(Icons.Default.Check, contentDescription = "保存")
@@ -766,4 +764,31 @@ fun ScriptFullScreenEditor(
             }
         }
     }
+}
+
+private suspend fun swapScriptsOrder(dao: com.pwa.shell.data.local.UserScriptDao, scripts: List<UserScriptEntity>, index1: Int, index2: Int) {
+    val list = scripts.toMutableList()
+    val item1 = list[index1]
+    val item2 = list[index2]
+    val tempOrder = item1.sortOrder
+    list[index1] = item2.copy(sortOrder = tempOrder)
+    list[index2] = item1.copy(sortOrder = item2.sortOrder)
+    dao.updateSortOrders(list)
+}
+
+fun updateMetaName(raw: String, newName: String): String {
+    val headerRegex = Regex("==UserScript==([\\s\\S]*?)==/UserScript==")
+    val matchResult = headerRegex.find(raw) ?: return raw
+    val headerContent = matchResult.groupValues[1]
+    val nameRegex = Regex("(@name\\s+).*")
+    val updatedHeaderContent = if (nameRegex.containsMatchIn(headerContent)) {
+        nameRegex.replace(headerContent) { match ->
+            "${match.groupValues[1]}$newName"
+        }
+    } else {
+        "\n// @name         $newName$headerContent"
+    }
+    val originalHeader = matchResult.value
+    val newHeader = "==UserScript==" + updatedHeaderContent + "==/UserScript=="
+    return raw.replace(originalHeader, newHeader)
 }
