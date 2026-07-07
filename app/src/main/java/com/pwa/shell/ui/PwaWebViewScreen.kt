@@ -127,6 +127,13 @@ fun PwaWebViewScreen(
                             // Flush cookies immediately to ensure persistence
                             CookieManager.getInstance().flush()
 
+                            // Dynamically update status bar color based on webpage theme color or body background
+                            if (view != null) {
+                                updateStatusBarFromWeb(view)
+                                // Delayed check for SPA dynamic rendering/hydration
+                                view.postDelayed({ updateStatusBarFromWeb(view) }, 500)
+                            }
+
                             // Dynamically inject Tencent vConsole in-app debugger if enabled
                             if (pwa.useDevConsole) {
                                 val ctx = view?.context
@@ -336,5 +343,54 @@ private fun getAssetFileString(context: android.content.Context, fileName: Strin
     } catch (e: Exception) {
         android.util.Log.e("WebViewError", "Failed to read asset $fileName: ${e.message}")
         ""
+    }
+}
+
+private fun updateStatusBarFromWeb(view: WebView) {
+    val js = """
+        (function() {
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta && meta.getAttribute('content')) {
+                return meta.getAttribute('content');
+            }
+            if (document.body) {
+                var bodyBg = window.getComputedStyle(document.body).backgroundColor;
+                return bodyBg;
+            }
+            return null;
+        })()
+    """.trimIndent()
+
+    view.evaluateJavascript(js) { colorStr ->
+        if (colorStr == null || colorStr == "null") return@evaluateJavascript
+        val cleaned = colorStr.replace("\"", "").trim()
+        if (cleaned.isEmpty()) return@evaluateJavascript
+
+        var parsedColor: Color? = null
+        try {
+            if (cleaned.startsWith("#")) {
+                parsedColor = Color(android.graphics.Color.parseColor(cleaned))
+            } else if (cleaned.startsWith("rgb")) {
+                val parts = cleaned.substringAfter("(").substringBefore(")").split(",")
+                if (parts.size >= 3) {
+                    val r = parts[0].trim().toInt()
+                    val g = parts[1].trim().toInt()
+                    val b = parts[2].trim().toInt()
+                    parsedColor = Color(r, g, b)
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+
+        if (parsedColor != null) {
+            val activity = view.context as? Activity
+            val window = activity?.window
+            if (window != null) {
+                window.statusBarColor = parsedColor.toArgb()
+                val isLight = isColorLight(parsedColor)
+                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = isLight
+            }
+        }
     }
 }
