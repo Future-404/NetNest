@@ -121,6 +121,12 @@ fun buildInjectionScript(scripts: List<UserScriptEntity>, phase: RunAt): String 
                         }
                         original.apply(console, args);
                     };
+                    console[level].toString = function() {
+                        return 'function ' + level + '() { [native code] }';
+                    };
+                    console[level].toString.toString = function() {
+                        return 'function toString() { [native code] }';
+                    };
                 });
             }
 

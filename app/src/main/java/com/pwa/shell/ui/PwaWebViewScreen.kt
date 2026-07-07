@@ -669,34 +669,42 @@ private fun injectSecuritySandbox(webView: WebView) {
                    }
                    return originalFetch.apply(this, arguments);
                };
+               window.fetch.toString = function() { return 'function fetch() { [native code] }'; };
+               window.fetch.toString.toString = function() { return 'function toString() { [native code] }'; };
            }
 
            // 2. Intercept XMLHttpRequest
-           const originalOpen = XMLHttpRequest.prototype.open;
-           const originalSend = XMLHttpRequest.prototype.send;
-           
-           XMLHttpRequest.prototype.open = function(method, url) {
-               this._url = url;
-               this._method = method;
-               return originalOpen.apply(this, arguments);
-           };
-           
-           XMLHttpRequest.prototype.send = function(body) {
-               const url = this._url || '';
-               const method = this._method || 'GET';
-               const reqBody = body || '';
+           if (window.XMLHttpRequest) {
+               const originalOpen = XMLHttpRequest.prototype.open;
+               const originalSend = XMLHttpRequest.prototype.send;
                
-               if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
-                   const decision = window.NetNestSecurity.auditRequest(url, method, serializeBody(reqBody));
-                   if (decision === 'BLOCK') {
-                       console.warn('[NetNest Sandbox] Blocked XHR upload to: ' + url);
-                       const errEvent = new ProgressEvent('error');
-                       this.dispatchEvent(errEvent);
-                       throw new Error('Network request blocked by NetNest Security Sandbox.');
+               XMLHttpRequest.prototype.open = function(method, url) {
+                   this._url = url;
+                   this._method = method;
+                   return originalOpen.apply(this, arguments);
+               };
+               XMLHttpRequest.prototype.open.toString = function() { return 'function open() { [native code] }'; };
+               XMLHttpRequest.prototype.open.toString.toString = function() { return 'function toString() { [native code] }'; };
+               
+               XMLHttpRequest.prototype.send = function(body) {
+                   const url = this._url || '';
+                   const method = this._method || 'GET';
+                   const reqBody = body || '';
+                   
+                   if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
+                       const decision = window.NetNestSecurity.auditRequest(url, method, serializeBody(reqBody));
+                       if (decision === 'BLOCK') {
+                           console.warn('[NetNest Sandbox] Blocked XHR upload to: ' + url);
+                           const errEvent = new ProgressEvent('error');
+                           this.dispatchEvent(errEvent);
+                           throw new Error('Network request blocked by NetNest Security Sandbox.');
+                       }
                    }
-               }
-               return originalSend.apply(this, arguments);
-           };
+                   return originalSend.apply(this, arguments);
+               };
+               XMLHttpRequest.prototype.send.toString = function() { return 'function send() { [native code] }'; };
+               XMLHttpRequest.prototype.send.toString.toString = function() { return 'function toString() { [native code] }'; };
+           }
 
            // 3. Intercept sendBeacon
            if (navigator.sendBeacon) {
@@ -712,6 +720,8 @@ private fun injectSecuritySandbox(webView: WebView) {
                    }
                    return originalSendBeacon.apply(this, arguments);
                };
+               navigator.sendBeacon.toString = function() { return 'function sendBeacon() { [native code] }'; };
+               navigator.sendBeacon.toString.toString = function() { return 'function toString() { [native code] }'; };
            }
 
             // 4. Override script integrity to bypass self-destruction checks dynamically
