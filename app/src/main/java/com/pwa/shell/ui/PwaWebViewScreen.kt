@@ -335,7 +335,11 @@ fun PwaWebViewScreen(
                     webView = this
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = if (pwa.useFullscreen) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)
+            }
         )
 
         // Privacy Security Sandbox Warning Dialog
