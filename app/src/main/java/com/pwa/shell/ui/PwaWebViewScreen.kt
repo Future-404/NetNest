@@ -43,6 +43,14 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.unit.dp
 import com.pwa.shell.data.local.PwaEntity
+import com.pwa.shell.data.local.AppDatabase
+import com.pwa.shell.data.local.UserScriptEntity
+import com.pwa.shell.data.local.RunAt
+import com.pwa.shell.data.local.ScriptStorageDao
+import com.pwa.shell.data.local.UserScriptDao
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -61,6 +69,27 @@ fun PwaWebViewScreen(
     var showSecurityDialog by remember { mutableStateOf(false) }
     var blockedUrl by remember { mutableStateOf("") }
     var currentCallback by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
+
+    val db = remember { AppDatabase.getDatabase(context) }
+    val userScriptDao = remember { db.userScriptDao() }
+    val scriptStorageDao = remember { db.scriptStorageDao() }
+    val coroutineScope = rememberCoroutineScope()
+
+    // Helper function to query and inject scripts for a specific phase
+    fun injectScriptsForPhase(view: WebView, url: String, phase: RunAt) {
+        coroutineScope.launch(Dispatchers.IO) {
+            val allScripts = userScriptDao.getScriptsForPwa(pwa.id)
+            val phaseScripts = allScripts.filter {
+                it.enabled && MatchPatternMatcher.matches(url, it.matchPatterns) && it.runAt == phase
+            }
+            if (phaseScripts.isNotEmpty()) {
+                val compiledJs = buildInjectionScript(phaseScripts)
+                withContext(Dispatchers.Main) {
+                    view.evaluateJavascript(compiledJs, null)
+                }
+            }
+        }
+    }
     LaunchedEffect(pwa.useFullscreen) {
         val activity = context.findActivity()
         val window = activity?.window
@@ -185,6 +214,14 @@ fun PwaWebViewScreen(
                         "NetNestSecurity"
                     )
 
+                    // Add User Script storage bridge
+                    addJavascriptInterface(
+                        NetNestScriptBridge(pwa.id, scriptStorageDao) { level, message ->
+                            ScriptLogCollector.addLog(level, message)
+                        },
+                        "NetNestScriptBridge"
+                    )
+
                     configureSettings(this, pwa.useChromeUa)
                     
                     webViewClient = object : WebViewClient() {
@@ -192,6 +229,9 @@ fun PwaWebViewScreen(
                             super.onPageStarted(view, url, favicon)
                             if (view != null) {
                                 injectSecuritySandbox(view)
+                                if (url != null) {
+                                    injectScriptsForPhase(view, url, RunAt.DOCUMENT_START)
+                                }
                             }
                         }
 
@@ -202,6 +242,12 @@ fun PwaWebViewScreen(
 
                             if (view != null) {
                                 injectSecuritySandbox(view)
+                                if (url != null) {
+                                    injectScriptsForPhase(view, url, RunAt.DOCUMENT_END)
+                                    view.postDelayed({
+                                        injectScriptsForPhase(view, url, RunAt.DOCUMENT_IDLE)
+                                    }, 500)
+                                }
                             }
 
                              // Dynamically update status bar color based on webpage theme color or body background

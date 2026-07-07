@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -192,6 +193,8 @@ fun HomeScreen(
                 )
             }
 
+            var showScriptManagerForPwa by remember { mutableStateOf<PwaEntity?>(null) }
+
             // Edit Dialog
             showEditDialog?.let { pwa ->
                 EditPwaDialog(
@@ -209,7 +212,19 @@ fun HomeScreen(
                             securityMode = securityMode,
                             trustedDomains = trustedDomains
                         ))
+                    },
+                    onManageScripts = {
+                        showEditDialog = null
+                        showScriptManagerForPwa = pwa
                     }
+                )
+            }
+
+            showScriptManagerForPwa?.let { pwa ->
+                UserScriptManagerScreen(
+                    pwa = pwa,
+                    viewModel = viewModel,
+                    onDismiss = { showScriptManagerForPwa = null }
                 )
             }
         }
@@ -526,7 +541,8 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String) -> Unit,
+    onManageScripts: () -> Unit
 ) {
     var name by remember { mutableStateOf(pwa.name) }
     var url by remember { mutableStateOf(pwa.url) }
@@ -654,6 +670,15 @@ fun EditPwaDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onManageScripts,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("管理自定义脚本")
                 }
             }
         }

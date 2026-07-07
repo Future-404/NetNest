@@ -4,11 +4,19 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 
-@Database(entities = [PwaEntity::class], version = 5, exportSchema = false)
+@Database(
+    entities = [PwaEntity::class, UserScriptEntity::class, ScriptStorageEntity::class],
+    version = 6,
+    exportSchema = false
+)
+@TypeConverters(StringListConverter::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun pwaDao(): PwaDao
+    abstract fun userScriptDao(): UserScriptDao
+    abstract fun scriptStorageDao(): ScriptStorageDao
 
     companion object {
         @Volatile

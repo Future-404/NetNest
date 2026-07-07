@@ -17,7 +17,10 @@ import java.io.File
 
 class MainViewModel(context: Context) : ViewModel() {
 
-    private val pwaDao: PwaDao = AppDatabase.getDatabase(context).pwaDao()
+    val database = AppDatabase.getDatabase(context)
+    private val pwaDao: PwaDao = database.pwaDao()
+    val userScriptDao = database.userScriptDao()
+    val scriptStorageDao = database.scriptStorageDao()
     private val client = OkHttpClient()
     private val fetcher = PwaManifestFetcher(client)
     private val downloader = IconDownloader(client)
