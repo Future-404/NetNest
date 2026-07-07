@@ -725,17 +725,90 @@ private fun injectSecuritySandbox(webView: WebView) {
            }
 
             // 4. Override script integrity to bypass self-destruction checks dynamically
-            Object.defineProperty(HTMLScriptElement.prototype, 'integrity', {
-                get: function() {
-                    return this.getAttribute('integrity') || '';
-                },
-                set: function(val) {
-                    this.setAttribute('integrity', val);
-                },
-                configurable: true,
-                enumerable: true
-            });
-       })();
+             try {
+                 Object.defineProperty(HTMLScriptElement.prototype, 'integrity', {
+                     get: function() {
+                         return this.getAttribute('integrity') || '';
+                     },
+                     set: function(val) {
+                         this.setAttribute('integrity', val);
+                     },
+                     configurable: true,
+                     enumerable: true
+                 });
+             } catch (e) {
+                 console.error('Failed to define integrity polyfill:', e);
+             }
+
+             // 5. Hide DevTools Debugging Libraries (vConsole, Eruda) from detection (DebugLib type 7)
+             try {
+                 let realVcOrigConsole = undefined;
+                 Object.defineProperty(window, '_vcOrigConsole', {
+                     get: function() {
+                         const stack = new Error().stack || '';
+                         if (stack.indexOf('vconsole') !== -1 || stack.indexOf('vConsole') !== -1) {
+                             return realVcOrigConsole;
+                         }
+                         return undefined;
+                     },
+                     set: function(val) { realVcOrigConsole = val; },
+                     configurable: true,
+                     enumerable: true
+                 });
+
+                 let realEruda = undefined;
+                 Object.defineProperty(window, 'eruda', {
+                     get: function() {
+                         const stack = new Error().stack || '';
+                         if (stack.indexOf('eruda') !== -1) {
+                             return realEruda;
+                         }
+                         return undefined;
+                     },
+                     set: function(val) { realEruda = val; },
+                     configurable: true,
+                     enumerable: true
+                 });
+
+                 const originalGetElementById = document.getElementById;
+                 document.getElementById = function(id) {
+                     if (id && (id.indexOf('vconsole') !== -1 || id.indexOf('eruda') !== -1)) {
+                         const stack = new Error().stack || '';
+                         if (stack.indexOf('vconsole') === -1 && stack.indexOf('eruda') === -1 && stack.indexOf('vConsole') === -1) {
+                             return null;
+                         }
+                     }
+                     return originalGetElementById.apply(this, arguments);
+                 };
+                 document.getElementById.toString = function() { return 'function getElementById() { [native code] }'; };
+
+                 const originalQuerySelector = document.querySelector;
+                 document.querySelector = function(selector) {
+                     if (selector && (selector.indexOf('vconsole') !== -1 || selector.indexOf('vc-toggle') !== -1 || selector.indexOf('eruda') !== -1)) {
+                         const stack = new Error().stack || '';
+                         if (stack.indexOf('vconsole') === -1 && stack.indexOf('eruda') === -1 && stack.indexOf('vConsole') === -1) {
+                             return null;
+                         }
+                     }
+                     return originalQuerySelector.apply(this, arguments);
+                 };
+                 document.querySelector.toString = function() { return 'function querySelector() { [native code] }'; };
+
+                 const originalQuerySelectorAll = document.querySelectorAll;
+                 document.querySelectorAll = function(selector) {
+                     if (selector && (selector.indexOf('vconsole') !== -1 || selector.indexOf('vc-toggle') !== -1 || selector.indexOf('eruda') !== -1)) {
+                         const stack = new Error().stack || '';
+                         if (stack.indexOf('vconsole') === -1 && stack.indexOf('eruda') === -1 && stack.indexOf('vConsole') === -1) {
+                             return document.createDocumentFragment().childNodes;
+                         }
+                     }
+                     return originalQuerySelectorAll.apply(this, arguments);
+                         };
+                         document.querySelectorAll.toString = function() { return 'function querySelectorAll() { [native code] }'; };
+             } catch (e) {
+                 console.error('Failed to initialize DevTools stealth polyfill:', e);
+             }
+        })();
     """.trimIndent()
     webView.evaluateJavascript(js, null)
 }
