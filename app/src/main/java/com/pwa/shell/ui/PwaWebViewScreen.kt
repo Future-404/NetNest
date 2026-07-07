@@ -42,6 +42,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.unit.dp
 import com.pwa.shell.data.local.PwaEntity
 import java.io.File
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.fillMaxWidth
 
 @Composable
 fun PwaWebViewScreen(
