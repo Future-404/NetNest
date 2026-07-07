@@ -230,6 +230,18 @@ fun PwaWebViewScreen(
 
                     configureSettings(this, pwa.useChromeUa)
                     
+                    if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                        try {
+                            androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                                this,
+                                getSecuritySandboxJs(),
+                                setOf("*")
+                            )
+                        } catch (e: Exception) {
+                            Log.e("PwaWebViewScreen", "addDocumentStartJavaScript error", e)
+                        }
+                    }
+                    
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                             super.onPageStarted(view, url, favicon)
@@ -632,8 +644,8 @@ private fun updateStatusBarFromWeb(view: WebView, useFullscreen: Boolean) {
     }
 }
 
-private fun injectSecuritySandbox(webView: WebView) {
-    val js = """
+private fun getSecuritySandboxJs(): String {
+    return """
        (function() {
            if (window.__netnest_sandbox_injected) return;
            window.__netnest_sandbox_injected = true;
@@ -810,7 +822,12 @@ private fun injectSecuritySandbox(webView: WebView) {
              }
         })();
     """.trimIndent()
-    webView.evaluateJavascript(js, null)
+}
+
+private fun injectSecuritySandbox(webView: WebView) {
+    if (!androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+        webView.evaluateJavascript(getSecuritySandboxJs(), null)
+    }
 }
 
 class SecurityBridge(
