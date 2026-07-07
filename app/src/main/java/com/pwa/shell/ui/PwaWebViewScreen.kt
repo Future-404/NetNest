@@ -124,20 +124,23 @@ fun PwaWebViewScreen(
 
                             // Dynamically inject Tencent vConsole in-app debugger if enabled
                             if (pwa.useDevConsole) {
-                                val injectScript = """
-                                    (function() {
-                                        if (window.vConsole || window.VConsole) return;
-                                        var script = document.createElement('script');
-                                        script.src = 'https://unpkg.com/vconsole@latest/dist/vconsole.min.js';
-                                        script.onload = function() {
-                                            try {
-                                                window.vConsole = new window.VConsole();
-                                            } catch(e) {}
-                                        };
-                                        document.body.appendChild(script);
-                                    })();
-                                """.trimIndent()
-                                view?.evaluateJavascript(injectScript, null)
+                                val ctx = view?.context
+                                if (ctx != null) {
+                                    val vConsoleJs = getAssetFileString(ctx, "vconsole.min.js")
+                                    if (vConsoleJs.isNotEmpty()) {
+                                        val injectScript = """
+                                            $vConsoleJs
+                                            (function() {
+                                                try {
+                                                    if (!window.vConsoleInstance && (window.vConsole || window.VConsole)) {
+                                                        window.vConsoleInstance = new window.VConsole();
+                                                    }
+                                                } catch(e) {}
+                                            })();
+                                        """.trimIndent()
+                                        view.evaluateJavascript(injectScript, null)
+                                    }
+                                }
                             }
                         }
 
@@ -321,3 +324,13 @@ private fun parseHexColor(hex: String?): Color {
         Color(0xFF6200EE)
     }
 }
+
+private fun getAssetFileString(context: android.content.Context, fileName: String): String {
+    return try {
+        context.assets.open(fileName).bufferedReader().use { it.readText() }
+    } catch (e: Exception) {
+        android.util.Log.e("WebViewError", "Failed to read asset $fileName: ${e.message}")
+        ""
+    }
+}
+
