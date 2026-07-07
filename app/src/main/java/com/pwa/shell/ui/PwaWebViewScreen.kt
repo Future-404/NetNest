@@ -653,21 +653,23 @@ private fun injectSecuritySandbox(webView: WebView) {
            }
 
            // 1. Intercept fetch
-           const originalFetch = window.fetch;
-           window.fetch = async function(input, init) {
-               const url = typeof input === 'string' ? input : (input ? input.url : '');
-               const method = (init && init.method) || 'GET';
-               const body = (init && init.body) || '';
-               
-               if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
-                   const decision = window.NetNestSecurity.auditRequest(url, method, serializeBody(body));
-                   if (decision === 'BLOCK') {
-                       console.warn('[NetNest Sandbox] Blocked upload to: ' + url);
-                       throw new TypeError('Failed to fetch: Request blocked by NetNest Security Sandbox.');
+           if (window.fetch) {
+               const originalFetch = window.fetch;
+               window.fetch = async function(input, init) {
+                   const url = typeof input === 'string' ? input : (input ? input.url : '');
+                   const method = (init && init.method) || 'GET';
+                   const body = (init && init.body) || '';
+                   
+                   if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
+                       const decision = window.NetNestSecurity.auditRequest(url, method, serializeBody(body));
+                       if (decision === 'BLOCK') {
+                           console.warn('[NetNest Sandbox] Blocked upload to: ' + url);
+                           throw new TypeError('Failed to fetch: Request blocked by NetNest Security Sandbox.');
+                       }
                    }
-               }
-               return originalFetch.apply(this, arguments);
-           };
+                   return originalFetch.apply(this, arguments);
+               };
+           }
 
            // 2. Intercept XMLHttpRequest
            const originalOpen = XMLHttpRequest.prototype.open;
@@ -710,6 +712,25 @@ private fun injectSecuritySandbox(webView: WebView) {
                    }
                    return originalSendBeacon.apply(this, arguments);
                };
+           }
+
+           // 4. Override script integrity to bypass self-destruction checks
+           const originalIntegrity = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'integrity');
+           if (originalIntegrity && originalIntegrity.configurable) {
+               Object.defineProperty(HTMLScriptElement.prototype, 'integrity', {
+                   get: function() {
+                       if (this.src && this.src.indexOf('bin/official/game.js') !== -1) {
+                           return 'sha384-ngl0x1KklyLMaduYM03CuTqlVPtBvC8OAMN7U4SAp30+mBuGXJP2pcNkaZw4oyJx';
+                       }
+                       return originalIntegrity.get ? originalIntegrity.get.call(this) : '';
+                   },
+                   set: function(val) {
+                       if (originalIntegrity.set) {
+                           originalIntegrity.set.call(this, val);
+                       }
+                   },
+                   configurable: true
+               });
            }
        })();
     """.trimIndent()
