@@ -60,6 +60,9 @@ class MainActivity : ComponentActivity() {
                                 onBackToHome = {
                                     currentScreen = Screen.Home
                                 },
+                                onUpdatePwa = { updatedPwa ->
+                                    viewModel.updatePwa(updatedPwa)
+                                },
                                 modifier = Modifier.fillMaxSize()
                             )
                         }

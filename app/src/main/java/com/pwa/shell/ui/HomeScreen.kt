@@ -185,9 +185,9 @@ fun HomeScreen(
                 ManualAddDialog(
                     initialUrl = failedUrl,
                     onDismiss = { showManualAddDialog = null },
-                    onConfirm = { name, url, theme, useChromeUa, useDevConsole, useFullscreen ->
+                    onConfirm = { name, url, theme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains ->
                         showManualAddDialog = null
-                        viewModel.addPwaManually(name, url, "", theme, useChromeUa, useDevConsole, useFullscreen)
+                        viewModel.addPwaManually(name, url, "", theme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains)
                     }
                 )
             }
@@ -197,7 +197,7 @@ fun HomeScreen(
                 EditPwaDialog(
                     pwa = pwa,
                     onDismiss = { showEditDialog = null },
-                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole, useFullscreen ->
+                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains ->
                         showEditDialog = null
                         viewModel.updatePwa(pwa.copy(
                             name = updatedName,
@@ -205,7 +205,9 @@ fun HomeScreen(
                             themeColor = updatedTheme,
                             useChromeUa = useChromeUa,
                             useDevConsole = useDevConsole,
-                            useFullscreen = useFullscreen
+                            useFullscreen = useFullscreen,
+                            securityMode = securityMode,
+                            trustedDomains = trustedDomains
                         ))
                     }
                 )
@@ -386,7 +388,7 @@ fun AddPwaDialog(
 fun ManualAddDialog(
     initialUrl: String,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf(initialUrl) }
@@ -394,6 +396,8 @@ fun ManualAddDialog(
     var useChromeUa by remember { mutableStateOf(true) }
     var useDevConsole by remember { mutableStateOf(false) }
     var useFullscreen by remember { mutableStateOf(false) }
+    var isSecurityShieldEnabled by remember { mutableStateOf(true) }
+    var trustedDomains by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -401,7 +405,16 @@ fun ManualAddDialog(
             TextButton(
                 onClick = {
                     if (name.isNotBlank() && url.isNotBlank()) {
-                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa, useDevConsole, useFullscreen)
+                        onConfirm(
+                            name,
+                            url,
+                            themeColor.takeIf { it.isNotBlank() },
+                            useChromeUa,
+                            useDevConsole,
+                            useFullscreen,
+                            if (isSecurityShieldEnabled) 1 else 0,
+                            trustedDomains
+                        )
                     }
                 }
             ) {
@@ -480,6 +493,30 @@ fun ManualAddDialog(
                         onCheckedChange = { useFullscreen = it }
                     )
                 }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("隐私数据上传拦截", style = MaterialTheme.typography.bodyMedium)
+                        Text("阻止网页静默上传聊天记录或API密钥，并弹窗警告。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = isSecurityShieldEnabled,
+                        onCheckedChange = { isSecurityShieldEnabled = it }
+                    )
+                }
+                if (isSecurityShieldEnabled) {
+                    OutlinedTextField(
+                        value = trustedDomains,
+                        onValueChange = { trustedDomains = it },
+                        label = { Text("信任的域名 (逗号分隔)") },
+                        placeholder = { Text("例如: api.openrouter.ai,api.openai.com") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         }
     )
@@ -489,7 +526,7 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String) -> Unit
 ) {
     var name by remember { mutableStateOf(pwa.name) }
     var url by remember { mutableStateOf(pwa.url) }
@@ -497,6 +534,8 @@ fun EditPwaDialog(
     var useChromeUa by remember { mutableStateOf(pwa.useChromeUa) }
     var useDevConsole by remember { mutableStateOf(pwa.useDevConsole) }
     var useFullscreen by remember { mutableStateOf(pwa.useFullscreen) }
+    var isSecurityShieldEnabled by remember { mutableStateOf(pwa.securityMode != 0) }
+    var trustedDomains by remember { mutableStateOf(pwa.trustedDomains) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -504,7 +543,16 @@ fun EditPwaDialog(
             TextButton(
                 onClick = {
                     if (name.isNotBlank() && url.isNotBlank()) {
-                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa, useDevConsole, useFullscreen)
+                        onConfirm(
+                            name,
+                            url,
+                            themeColor.takeIf { it.isNotBlank() },
+                            useChromeUa,
+                            useDevConsole,
+                            useFullscreen,
+                            if (isSecurityShieldEnabled) 1 else 0,
+                            trustedDomains
+                        )
                     }
                 }
             ) {
@@ -581,6 +629,30 @@ fun EditPwaDialog(
                     Switch(
                         checked = useFullscreen,
                         onCheckedChange = { useFullscreen = it }
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("隐私数据上传拦截", style = MaterialTheme.typography.bodyMedium)
+                        Text("阻止网页静默上传聊天记录或API密钥，并弹窗警告。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = isSecurityShieldEnabled,
+                        onCheckedChange = { isSecurityShieldEnabled = it }
+                    )
+                }
+                if (isSecurityShieldEnabled) {
+                    OutlinedTextField(
+                        value = trustedDomains,
+                        onValueChange = { trustedDomains = it },
+                        label = { Text("信任的域名 (逗号分隔)") },
+                        placeholder = { Text("例如: api.openrouter.ai,api.openai.com") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }

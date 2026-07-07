@@ -15,5 +15,7 @@ data class PwaEntity(
     val addedTime: Long,
     val useChromeUa: Boolean = true,
     val useDevConsole: Boolean = false,
-    val useFullscreen: Boolean = false
+    val useFullscreen: Boolean = false,
+    val securityMode: Int = 1, // 0: Disabled, 1: Block & Warn, 2: Silent Block
+    val trustedDomains: String = "" // Comma-separated trusted hosts
 )

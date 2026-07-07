@@ -47,12 +47,16 @@ import java.io.File
 fun PwaWebViewScreen(
     pwa: PwaEntity,
     onBackToHome: () -> Unit,
+    onUpdatePwa: (PwaEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val view = LocalView.current
     val darkTheme = isSystemInDarkTheme()
     var webView: WebView? by remember { mutableStateOf(null) }
+    var showSecurityDialog by remember { mutableStateOf(false) }
+    var blockedUrl by remember { mutableStateOf("") }
+    var currentCallback by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
     LaunchedEffect(pwa.useFullscreen) {
         val activity = context as? Activity
         val window = activity?.window
@@ -149,13 +153,34 @@ fun PwaWebViewScreen(
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
+                    // Add Security Sandbox Javascript Interface Bridge
+                    addJavascriptInterface(
+                        SecurityBridge(pwa) { urlAndLeakType, callback ->
+                            blockedUrl = urlAndLeakType
+                            currentCallback = callback
+                            showSecurityDialog = true
+                        },
+                        "NetNestSecurity"
+                    )
+
                     configureSettings(this, pwa.useChromeUa)
                     
                     webViewClient = object : WebViewClient() {
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            super.onPageStarted(view, url, favicon)
+                            if (view != null) {
+                                injectSecuritySandbox(view)
+                            }
+                        }
+
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
                             // Flush cookies immediately to ensure persistence
                             CookieManager.getInstance().flush()
+
+                            if (view != null) {
+                                injectSecuritySandbox(view)
+                            }
 
                              // Dynamically update status bar color based on webpage theme color or body background
                             if (view != null) {
@@ -290,6 +315,55 @@ fun PwaWebViewScreen(
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Privacy Security Sandbox Warning Dialog
+        if (showSecurityDialog) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = {
+                    currentCallback?.invoke(false)
+                    showSecurityDialog = false
+                },
+                title = { Text("🔒 隐私安全警报") },
+                text = {
+                    Text("NetNest 沙箱检测到网页正在尝试秘密上传您的私密数据：\n\n目标地址：$blockedUrl\n\n该行为可能会泄露您的聊天历史、API密钥或账号凭证。是否拦截该上传行为？")
+                },
+                confirmButton = {
+                    androidx.compose.foundation.layout.Row(
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                currentCallback?.invoke(false) // Block!
+                                showSecurityDialog = false
+                            }
+                        ) {
+                            Text("拦截 (推荐)", color = Color.Red)
+                        }
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                currentCallback?.invoke(true) // Allow once!
+                                showSecurityDialog = false
+                            }
+                        ) {
+                            Text("允许一次", color = Color.Gray)
+                        }
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                val host = blockedUrl.substringBefore(" ").trim()
+                                val newTrusted = if (pwa.trustedDomains.isEmpty()) host else "${pwa.trustedDomains},$host"
+                                onUpdatePwa(pwa.copy(trustedDomains = newTrusted))
+                                currentCallback?.invoke(true) // Allow permanently!
+                                showSecurityDialog = false
+                            }
+                        ) {
+                            Text("信任该域名", color = Color(0xFF4CAF50))
+                        }
+                    }
+                },
+                dismissButton = null
+            )
+        }
     }
 }
 
@@ -424,3 +498,146 @@ private fun updateStatusBarFromWeb(view: WebView, useFullscreen: Boolean) {
         }
     }
 }
+
+private fun injectSecuritySandbox(webView: WebView) {
+    val js = """
+       (function() {
+           if (window.__netnest_sandbox_injected) return;
+           window.__netnest_sandbox_injected = true;
+
+           // 1. Intercept fetch
+           const originalFetch = window.fetch;
+           window.fetch = async function(input, init) {
+               const url = typeof input === 'string' ? input : (input ? input.url : '');
+               const method = (init && init.method) || 'GET';
+               const body = (init && init.body) || '';
+               
+               if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
+                   const decision = window.NetNestSecurity.auditRequest(url, method, String(body));
+                   if (decision === 'BLOCK') {
+                       console.warn('[NetNest Sandbox] Blocked upload to: ' + url);
+                       throw new TypeError('Failed to fetch: Request blocked by NetNest Security Sandbox.');
+                   }
+               }
+               return originalFetch.apply(this, arguments);
+           };
+
+           // 2. Intercept XMLHttpRequest
+           const originalOpen = XMLHttpRequest.prototype.open;
+           const originalSend = XMLHttpRequest.prototype.send;
+           
+           XMLHttpRequest.prototype.open = function(method, url) {
+               this._url = url;
+               this._method = method;
+               return originalOpen.apply(this, arguments);
+           };
+           
+           XMLHttpRequest.prototype.send = function(body) {
+               const url = this._url || '';
+               const method = this._method || 'GET';
+               const reqBody = body || '';
+               
+               if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
+                   const decision = window.NetNestSecurity.auditRequest(url, method, String(reqBody));
+                   if (decision === 'BLOCK') {
+                       console.warn('[NetNest Sandbox] Blocked XHR upload to: ' + url);
+                       const errEvent = new ProgressEvent('error');
+                       this.dispatchEvent(errEvent);
+                       throw new Error('Network request blocked by NetNest Security Sandbox.');
+                   }
+               }
+               return originalSend.apply(this, arguments);
+           };
+
+           // 3. Intercept sendBeacon
+           if (navigator.sendBeacon) {
+               const originalSendBeacon = navigator.sendBeacon;
+               navigator.sendBeacon = function(url, data) {
+                   const reqBody = data || '';
+                   if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
+                       const decision = window.NetNestSecurity.auditRequest(url, 'POST', String(reqBody));
+                       if (decision === 'BLOCK') {
+                           console.warn('[NetNest Sandbox] Blocked sendBeacon upload to: ' + url);
+                           return false;
+                       }
+                   }
+                   return originalSendBeacon.apply(this, arguments);
+               };
+           }
+       })();
+    """.trimIndent()
+    webView.evaluateJavascript(js, null)
+}
+
+class SecurityBridge(
+    private val pwa: PwaEntity,
+    private val onShowBlockDialog: (urlAndLeakType: String, callback: (Boolean) -> Unit) -> Unit
+) {
+    @android.webkit.JavascriptInterface
+    fun auditRequest(url: String, method: String, body: String): String {
+        if (pwa.securityMode == 0) return "ALLOW"
+
+        val uri = Uri.parse(url)
+        val host = uri.host ?: ""
+        if (host.isEmpty()) return "ALLOW"
+
+        // Always trust PWA host itself
+        val pwaUri = Uri.parse(pwa.url)
+        val pwaHost = pwaUri.host ?: ""
+        if (host.equals(pwaHost, ignoreCase = true)) {
+            return "ALLOW"
+        }
+
+        // Check whitelisted trustedDomains
+        val whitelist = pwa.trustedDomains.split(",").map { it.trim().lowercase() }
+        if (whitelist.any { it.isNotEmpty() && (host.endsWith(it) || it.endsWith(host)) }) {
+            return "ALLOW"
+        }
+
+        // Analyze POST/PUT upload data
+        val isPost = method.equals("POST", ignoreCase = true) || method.equals("PUT", ignoreCase = true)
+        var detectedLeak = false
+        var leakType = ""
+
+        if (isPost && body.isNotEmpty()) {
+            val lowerBody = body.lowercase()
+            if (lowerBody.contains("role") && (lowerBody.contains("content") || lowerBody.contains("messages"))) {
+                detectedLeak = true
+                leakType = "聊天记录"
+            } else if (body.contains("sk-") || body.contains("x-goog-api-key")) {
+                detectedLeak = true
+                leakType = "API 密钥"
+            } else if (lowerBody.contains("password") || lowerBody.contains("passwd") || lowerBody.contains("session_token")) {
+                detectedLeak = true
+                leakType = "账号凭证"
+            }
+        }
+
+        if (!detectedLeak) {
+            return "ALLOW"
+        }
+
+        // Block silently
+        if (pwa.securityMode == 2) {
+            return "BLOCK"
+        }
+
+        // Show dialog and block thread
+        var isAllowed = false
+        val latch = java.util.concurrent.CountDownLatch(1)
+
+        onShowBlockDialog("$host ($leakType)") { allowed ->
+            isAllowed = allowed
+            latch.countDown()
+        }
+
+        try {
+            latch.await()
+        } catch (e: InterruptedException) {
+            // Default to block
+        }
+
+        return if (isAllowed) "ALLOW" else "BLOCK"
+    }
+}
+
