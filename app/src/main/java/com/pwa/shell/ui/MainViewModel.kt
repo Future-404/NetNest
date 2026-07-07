@@ -53,7 +53,7 @@ class MainViewModel(context: Context) : ViewModel() {
         }
     }
 
-    fun addPwaManually(name: String, url: String, iconPath: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean) {
+    fun addPwaManually(name: String, url: String, iconPath: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean) {
         viewModelScope.launch {
             val pwaEntity = PwaEntity(
                 name = name,
@@ -63,7 +63,8 @@ class MainViewModel(context: Context) : ViewModel() {
                 displayOrder = 0,
                 addedTime = System.currentTimeMillis(),
                 useChromeUa = useChromeUa,
-                useDevConsole = useDevConsole
+                useDevConsole = useDevConsole,
+                useFullscreen = useFullscreen
             )
             pwaDao.insert(pwaEntity)
             _uiState.value = UiState.Success("PWA 手动添加成功")

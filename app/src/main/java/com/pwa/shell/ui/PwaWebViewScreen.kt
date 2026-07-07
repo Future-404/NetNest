@@ -53,18 +53,16 @@ fun PwaWebViewScreen(
     val view = LocalView.current
     val darkTheme = isSystemInDarkTheme()
     var webView: WebView? by remember { mutableStateOf(null) }
-    var isStatusBarVisible by remember { mutableStateOf(true) }
-
-    LaunchedEffect(isStatusBarVisible) {
+    LaunchedEffect(pwa.useFullscreen) {
         val activity = context as? Activity
         val window = activity?.window
         if (window != null) {
             val controller = WindowCompat.getInsetsController(window, view)
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            if (isStatusBarVisible) {
-                controller.show(WindowInsetsCompat.Type.statusBars())
-            } else {
+            if (pwa.useFullscreen) {
                 controller.hide(WindowInsetsCompat.Type.statusBars())
+            } else {
+                controller.show(WindowInsetsCompat.Type.statusBars())
             }
         }
     }
@@ -105,7 +103,7 @@ fun PwaWebViewScreen(
     DisposableEffect(pwa) {
         val activity = context as? Activity
         val window = activity?.window
-        if (window != null) {
+        if (window != null && !pwa.useFullscreen) {
             // Keep edge-to-edge layout false
             WindowCompat.setDecorFitsSystemWindows(window, false)
             
@@ -159,11 +157,11 @@ fun PwaWebViewScreen(
                             // Flush cookies immediately to ensure persistence
                             CookieManager.getInstance().flush()
 
-                            // Dynamically update status bar color based on webpage theme color or body background
+                             // Dynamically update status bar color based on webpage theme color or body background
                             if (view != null) {
-                                updateStatusBarFromWeb(view)
+                                updateStatusBarFromWeb(view, pwa.useFullscreen)
                                 // Delayed check for SPA dynamic rendering/hydration
-                                view.postDelayed({ updateStatusBarFromWeb(view) }, 500)
+                                view.postDelayed({ updateStatusBarFromWeb(view, pwa.useFullscreen) }, 500)
                             }
 
                             // Dynamically inject Tencent vConsole in-app debugger if enabled
@@ -292,31 +290,6 @@ fun PwaWebViewScreen(
             },
             modifier = Modifier.fillMaxSize()
         )
-
-        // Floating Status Bar Toggle Button
-        IconButton(
-            onClick = { isStatusBarVisible = !isStatusBarVisible },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(top = 16.dp, end = 16.dp)
-                .size(36.dp)
-                .background(
-                    color = Color.Black.copy(alpha = 0.3f),
-                    shape = CircleShape
-                ),
-            colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
-        ) {
-            Icon(
-                imageVector = if (isStatusBarVisible) {
-                    Icons.Default.KeyboardArrowUp
-                } else {
-                    Icons.Default.KeyboardArrowDown
-                },
-                contentDescription = "切换通知栏",
-                modifier = Modifier.size(20.dp)
-            )
-        }
     }
 }
 
@@ -403,7 +376,7 @@ private fun getAssetFileString(context: android.content.Context, fileName: Strin
     }
 }
 
-private fun updateStatusBarFromWeb(view: WebView) {
+private fun updateStatusBarFromWeb(view: WebView, useFullscreen: Boolean) {
     val js = """
         (function() {
             var meta = document.querySelector('meta[name="theme-color"]');
@@ -440,7 +413,7 @@ private fun updateStatusBarFromWeb(view: WebView) {
             // Ignore
         }
 
-        if (parsedColor != null) {
+        if (parsedColor != null && !useFullscreen) {
             val activity = view.context as? Activity
             val window = activity?.window
             if (window != null) {

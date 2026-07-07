@@ -14,5 +14,6 @@ data class PwaEntity(
     val displayOrder: Int,
     val addedTime: Long,
     val useChromeUa: Boolean = true,
-    val useDevConsole: Boolean = false
+    val useDevConsole: Boolean = false,
+    val useFullscreen: Boolean = false
 )

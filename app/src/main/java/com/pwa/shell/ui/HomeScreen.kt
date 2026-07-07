@@ -185,9 +185,9 @@ fun HomeScreen(
                 ManualAddDialog(
                     initialUrl = failedUrl,
                     onDismiss = { showManualAddDialog = null },
-                    onConfirm = { name, url, theme, useChromeUa, useDevConsole ->
+                    onConfirm = { name, url, theme, useChromeUa, useDevConsole, useFullscreen ->
                         showManualAddDialog = null
-                        viewModel.addPwaManually(name, url, "", theme, useChromeUa, useDevConsole)
+                        viewModel.addPwaManually(name, url, "", theme, useChromeUa, useDevConsole, useFullscreen)
                     }
                 )
             }
@@ -197,9 +197,16 @@ fun HomeScreen(
                 EditPwaDialog(
                     pwa = pwa,
                     onDismiss = { showEditDialog = null },
-                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole ->
+                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole, useFullscreen ->
                         showEditDialog = null
-                        viewModel.updatePwa(pwa.copy(name = updatedName, url = updatedUrl, themeColor = updatedTheme, useChromeUa = useChromeUa, useDevConsole = useDevConsole))
+                        viewModel.updatePwa(pwa.copy(
+                            name = updatedName,
+                            url = updatedUrl,
+                            themeColor = updatedTheme,
+                            useChromeUa = useChromeUa,
+                            useDevConsole = useDevConsole,
+                            useFullscreen = useFullscreen
+                        ))
                     }
                 )
             }
@@ -379,13 +386,14 @@ fun AddPwaDialog(
 fun ManualAddDialog(
     initialUrl: String,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf(initialUrl) }
     var themeColor by remember { mutableStateOf("#6200EE") }
     var useChromeUa by remember { mutableStateOf(true) }
     var useDevConsole by remember { mutableStateOf(false) }
+    var useFullscreen by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -393,7 +401,7 @@ fun ManualAddDialog(
             TextButton(
                 onClick = {
                     if (name.isNotBlank() && url.isNotBlank()) {
-                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa, useDevConsole)
+                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa, useDevConsole, useFullscreen)
                     }
                 }
             ) {
@@ -458,6 +466,20 @@ fun ManualAddDialog(
                         onCheckedChange = { useDevConsole = it }
                     )
                 }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("全屏隐藏状态栏", style = MaterialTheme.typography.bodyMedium)
+                        Text("进入该 PWA 后完全隐藏系统通知栏/状态栏。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = useFullscreen,
+                        onCheckedChange = { useFullscreen = it }
+                    )
+                }
             }
         }
     )
@@ -467,13 +489,14 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(pwa.name) }
     var url by remember { mutableStateOf(pwa.url) }
     var themeColor by remember { mutableStateOf(pwa.themeColor ?: "") }
     var useChromeUa by remember { mutableStateOf(pwa.useChromeUa) }
     var useDevConsole by remember { mutableStateOf(pwa.useDevConsole) }
+    var useFullscreen by remember { mutableStateOf(pwa.useFullscreen) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -481,7 +504,7 @@ fun EditPwaDialog(
             TextButton(
                 onClick = {
                     if (name.isNotBlank() && url.isNotBlank()) {
-                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa, useDevConsole)
+                        onConfirm(name, url, themeColor.takeIf { it.isNotBlank() }, useChromeUa, useDevConsole, useFullscreen)
                     }
                 }
             ) {
@@ -544,6 +567,20 @@ fun EditPwaDialog(
                     Switch(
                         checked = useDevConsole,
                         onCheckedChange = { useDevConsole = it }
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("全屏隐藏状态栏", style = MaterialTheme.typography.bodyMedium)
+                        Text("进入该 PWA 后完全隐藏系统通知栏/状态栏。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = useFullscreen,
+                        onCheckedChange = { useFullscreen = it }
                     )
                 }
             }
