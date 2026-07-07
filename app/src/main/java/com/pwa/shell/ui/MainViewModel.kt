@@ -29,7 +29,7 @@ class MainViewModel(context: Context) : ViewModel() {
 
     fun addPwa(url: String, context: Context) {
         viewModelScope.launch {
-            _uiState.value = UiState.Loading("Fetching PWA metadata...")
+            _uiState.value = UiState.Loading("正在获取 PWA 元数据...")
             try {
                 val result = fetcher.fetchPwaInfo(url)
                 val localIconPath = result.iconUrl?.let { downloader.downloadIcon(context, it) } ?: ""
@@ -43,10 +43,10 @@ class MainViewModel(context: Context) : ViewModel() {
                     addedTime = System.currentTimeMillis()
                 )
                 pwaDao.insert(pwaEntity)
-                _uiState.value = UiState.Success("PWA added successfully")
+                _uiState.value = UiState.Success("PWA 添加成功")
             } catch (e: Exception) {
                 _uiState.value = UiState.Error(
-                    message = e.localizedMessage ?: "Failed to fetch metadata",
+                    message = e.localizedMessage ?: "获取元数据失败",
                     fallbackUrl = url
                 )
             }
@@ -66,7 +66,7 @@ class MainViewModel(context: Context) : ViewModel() {
                 useDevConsole = useDevConsole
             )
             pwaDao.insert(pwaEntity)
-            _uiState.value = UiState.Success("PWA added manually")
+            _uiState.value = UiState.Success("PWA 手动添加成功")
         }
     }
 
@@ -91,7 +91,7 @@ class MainViewModel(context: Context) : ViewModel() {
 
     fun refreshPwaIcon(pwa: PwaEntity, context: Context) {
         viewModelScope.launch {
-            _uiState.value = UiState.Loading("Refreshing icon...")
+            _uiState.value = UiState.Loading("正在刷新图标...")
             try {
                 val result = fetcher.fetchPwaInfo(pwa.url)
                 val localIconPath = result.iconUrl?.let { downloader.downloadIcon(context, it) } ?: ""
@@ -106,12 +106,12 @@ class MainViewModel(context: Context) : ViewModel() {
                         themeColor = result.themeColor ?: pwa.themeColor
                     )
                     pwaDao.update(updated)
-                    _uiState.value = UiState.Success("Icon refreshed")
+                    _uiState.value = UiState.Success("图标已刷新")
                 } else {
-                    _uiState.value = UiState.Success("No new icon found")
+                    _uiState.value = UiState.Success("未找到新图标")
                 }
             } catch (e: Exception) {
-                _uiState.value = UiState.Success("Failed to refresh: ${e.message}")
+                _uiState.value = UiState.Success("刷新失败：${e.message}")
             }
         }
     }

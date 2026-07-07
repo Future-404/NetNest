@@ -297,7 +297,7 @@ private fun handleUrlRedirection(view: WebView?, url: String): Boolean {
         view?.context?.startActivity(intent)
         return true
     } catch (e: Exception) {
-        Toast.makeText(view?.context, "No application found to open link: $url", Toast.LENGTH_LONG).show()
+        Toast.makeText(view?.context, "未找到打开链接的应用：$url", Toast.LENGTH_LONG).show()
         return true
     }
 }
@@ -338,4 +338,3 @@ private fun getAssetFileString(context: android.content.Context, fileName: Strin
         ""
     }
 }
-

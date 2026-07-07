@@ -66,7 +66,7 @@ fun HomeScreen(
                 shape = RoundedCornerShape(16.dp),
                 elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 2.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add PWA")
+                Icon(Icons.Default.Add, contentDescription = "添加 PWA")
             }
         },
         containerColor = Color(0xFFF5F5F3), // Light neutral warm-gray background
@@ -83,7 +83,7 @@ fun HomeScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No web apps added yet.\nTap '+' to create your customized net desktop!",
+                        text = "还没有添加网页应用。\n点击 '+' 创建您的专属网络桌面！",
                         textAlign = TextAlign.Center,
                         color = Color(0xFF7D7A76),
                         fontSize = 14.sp,
@@ -130,7 +130,7 @@ fun HomeScreen(
                     AlertDialog(
                         onDismissRequest = {},
                         confirmButton = {},
-                        title = { Text("Please wait...") },
+                        title = { Text("请稍候...") },
                         text = {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -155,16 +155,16 @@ fun HomeScreen(
                                 viewModel.resetState()
                                 showManualAddDialog = state.fallbackUrl
                             }) {
-                                Text("Add Manually")
+                                Text("手动添加")
                             }
                         },
                         dismissButton = {
                             TextButton(onClick = { viewModel.resetState() }) {
-                                Text("Cancel")
+                                Text("取消")
                             }
                         },
-                        title = { Text("Error") },
-                        text = { Text("${state.message}\n\nWould you like to add this PWA manually?") }
+                        title = { Text("错误") },
+                        text = { Text("${state.message}\n\n您想手动添加此 PWA 吗？") }
                     )
                 }
                 UiState.Idle -> {}
@@ -287,14 +287,14 @@ fun PwaGridItem(
                 offset = DpOffset(x = (-30).dp, y = (-20).dp)
             ) {
                 DropdownMenuItem(
-                    text = { Text("Edit") },
+                    text = { Text("编辑") },
                     onClick = {
                         expanded = false
                         onEdit()
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Refresh Icon") },
+                    text = { Text("刷新图标") },
                     onClick = {
                         expanded = false
                         onRefresh()
@@ -302,7 +302,7 @@ fun PwaGridItem(
                 )
                 if (index > 0) {
                     DropdownMenuItem(
-                        text = { Text("Move Left") },
+                        text = { Text("左移") },
                         onClick = {
                             expanded = false
                             onMove(-1)
@@ -311,7 +311,7 @@ fun PwaGridItem(
                 }
                 if (index < totalItems - 1) {
                     DropdownMenuItem(
-                        text = { Text("Move Right") },
+                        text = { Text("右移") },
                         onClick = {
                             expanded = false
                             onMove(1)
@@ -320,7 +320,7 @@ fun PwaGridItem(
                 }
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("Delete", color = Color.Red) },
+                    text = { Text("删除", color = Color.Red) },
                     onClick = {
                         expanded = false
                         onDelete()
@@ -351,32 +351,32 @@ fun AddPwaDialog(
                     }
                 }
             ) {
-                Text("Add")
+                Text("添加")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("取消")
             }
         },
-        title = { Text("Add New PWA") },
+        title = { Text("添加新 PWA") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Enter the website URL. NetNest will automatically parse the PWA manifest.")
+                Text("输入网站 URL。NetNest 将自动解析 PWA 清单。")
                 OutlinedTextField(
                     value = url,
                     onValueChange = {
                         url = it
                         isError = false
                     },
-                    label = { Text("Website URL") },
+                    label = { Text("网站 URL") },
                     placeholder = { Text("example.com") },
                     singleLine = true,
                     isError = isError,
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (isError) {
-                    Text("URL cannot be empty", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    Text("URL 不能为空", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 }
             }
         }
@@ -405,35 +405,35 @@ fun ManualAddDialog(
                     }
                 }
             ) {
-                Text("Save")
+                Text("保存")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("取消")
             }
         },
-        title = { Text("Add PWA Manually") },
+        title = { Text("手动添加 PWA") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("App Name") },
+                    label = { Text("应用名称") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Website URL") },
+                    label = { Text("网站 URL") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = themeColor,
                     onValueChange = { themeColor = it },
-                    label = { Text("Theme Color (Hex)") },
+                    label = { Text("主题颜色 (十六进制)") },
                     placeholder = { Text("#6200EE") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -444,8 +444,8 @@ fun ManualAddDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("Standard Chrome User-Agent", style = MaterialTheme.typography.bodyMedium)
-                        Text("Strips '; wv' to prevent functionality degradation.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text("标准 Chrome User-Agent", style = MaterialTheme.typography.bodyMedium)
+                        Text("移除 '; wv' 以防止功能退化。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                     Switch(
                         checked = useChromeUa,
@@ -458,8 +458,8 @@ fun ManualAddDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("In-App DevConsole", style = MaterialTheme.typography.bodyMedium)
-                        Text("Injects vConsole to debug Console and Storage inside App.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text("应用内开发者控制台", style = MaterialTheme.typography.bodyMedium)
+                        Text("注入 vConsole 以在应用内调试控制台和存储。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                     Switch(
                         checked = useDevConsole,
@@ -493,35 +493,35 @@ fun EditPwaDialog(
                     }
                 }
             ) {
-                Text("Save")
+                Text("保存")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("取消")
             }
         },
-        title = { Text("Edit PWA") },
+        title = { Text("编辑 PWA") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("App Name") },
+                    label = { Text("应用名称") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Website URL") },
+                    label = { Text("网站 URL") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = themeColor,
                     onValueChange = { themeColor = it },
-                    label = { Text("Theme Color (Hex)") },
+                    label = { Text("主题颜色 (十六进制)") },
                     placeholder = { Text("#6200EE") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -532,8 +532,8 @@ fun EditPwaDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("Standard Chrome User-Agent", style = MaterialTheme.typography.bodyMedium)
-                        Text("Strips '; wv' to prevent functionality degradation.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text("标准 Chrome User-Agent", style = MaterialTheme.typography.bodyMedium)
+                        Text("移除 '; wv' 以防止功能退化。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                     Switch(
                         checked = useChromeUa,
@@ -546,8 +546,8 @@ fun EditPwaDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("In-App DevConsole", style = MaterialTheme.typography.bodyMedium)
-                        Text("Injects vConsole to debug Console and Storage inside App.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text("应用内开发者控制台", style = MaterialTheme.typography.bodyMedium)
+                        Text("注入 vConsole 以在应用内调试控制台和存储。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                     Switch(
                         checked = useDevConsole,
