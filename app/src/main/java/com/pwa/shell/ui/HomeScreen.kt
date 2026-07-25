@@ -1,10 +1,12 @@
 package com.pwa.shell.ui
 
+import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,6 +49,7 @@ fun HomeScreen(
     var showAddDialog by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf<PwaEntity?>(null) }
     var showManualAddDialog by remember { mutableStateOf<String?>(null) }
+    var showDeleteConfirmDialog by remember { mutableStateOf<PwaEntity?>(null) }
 
     // Configure Coil ImageLoader with SVG support
     val imageLoader = remember {
@@ -91,6 +94,18 @@ fun HomeScreen(
                         lineHeight = 22.sp
                     )
                 }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = 24.dp),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Text(
+                        text = "NetNest v${getAppVersionName(context)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray.copy(alpha = 0.6f)
+                    )
+                }
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(4), // 4 columns per row
@@ -107,7 +122,7 @@ fun HomeScreen(
                             totalItems = pwas.size,
                             imageLoader = imageLoader,
                             onClick = { onPwaClick(pwa) },
-                            onDelete = { viewModel.deletePwa(pwa) },
+                            onDelete = { showDeleteConfirmDialog = pwa },
                             onEdit = { showEditDialog = pwa },
                             onMove = { direction ->
                                 val mutablePwas = pwas.toMutableList()
@@ -120,6 +135,21 @@ fun HomeScreen(
                                 }
                             }
                         )
+                    }
+
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 24.dp, bottom = 48.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "NetNest v${getAppVersionName(context)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray.copy(alpha = 0.6f)
+                            )
+                        }
                     }
                 }
             }
@@ -225,6 +255,30 @@ fun HomeScreen(
                     pwa = pwa,
                     viewModel = viewModel,
                     onDismiss = { showScriptManagerForPwa = null }
+                )
+            }
+
+            // Delete Confirmation Dialog
+            showDeleteConfirmDialog?.let { pwa ->
+                AlertDialog(
+                    onDismissRequest = { showDeleteConfirmDialog = null },
+                    title = { Text("确认删除网页应用？") },
+                    text = { Text("您将删除网页应用 \"${pwa.name}\"。这将会清理该网站的本地存储数据（LocalStorage, Cookies 等）和图标缓存。此操作无法撤销。") },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                viewModel.deletePwa(pwa)
+                                showDeleteConfirmDialog = null
+                            }
+                        ) {
+                            Text("确认删除", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteConfirmDialog = null }) {
+                            Text("取消")
+                        }
+                    }
                 )
             }
         }
@@ -721,5 +775,14 @@ private fun parseHexColor(hex: String?): Color {
         }
     } catch (e: Exception) {
         Color(0xFF6200EE)
+    }
+}
+
+private fun getAppVersionName(context: Context): String {
+    return try {
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        packageInfo.versionName ?: "1.0.0"
+    } catch (e: Exception) {
+        "1.0.0"
     }
 }
