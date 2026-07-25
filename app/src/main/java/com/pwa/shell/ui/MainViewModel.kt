@@ -1,6 +1,10 @@
 package com.pwa.shell.ui
 
 import android.content.Context
+import android.net.Uri
+import android.util.Log
+import android.webkit.CookieManager
+import android.webkit.WebStorage
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pwa.shell.data.local.AppDatabase
@@ -91,6 +95,42 @@ class MainViewModel(context: Context) : ViewModel() {
                     file.delete()
                 }
             }
+            
+            // Clear WebView WebStorage and Cookies for the PWA domain to prevent data residues
+            try {
+                val uri = Uri.parse(pwa.url)
+                val scheme = uri.scheme ?: "https"
+                val host = uri.host ?: ""
+                if (host.isNotEmpty()) {
+                    val port = uri.port
+                    val origin = if (port != -1) {
+                        "$scheme://$host:$port"
+                    } else {
+                        "$scheme://$host"
+                    }
+                    
+                    // 1. Delete WebStorage (LocalStorage, IndexedDB, WebSQL, AppCache) for this origin
+                    WebStorage.getInstance().deleteOrigin(origin)
+                    
+                    // 2. Clear Cookies for this URL/Domain
+                    val cookieManager = CookieManager.getInstance()
+                    val cookieString = cookieManager.getCookie(pwa.url)
+                    if (!cookieString.isNullOrEmpty()) {
+                        cookieString.split(";").forEach { cookie ->
+                            val parts = cookie.split("=")
+                            if (parts.isNotEmpty()) {
+                                val name = parts[0].trim()
+                                // Clear cookie by setting it with an expired date
+                                cookieManager.setCookie(pwa.url, "$name=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/")
+                            }
+                        }
+                        cookieManager.flush()
+                    }
+                }
+            } catch (e: java.lang.Exception) {
+                Log.e("MainViewModel", "Failed to clean WebView cache for ${pwa.url}", e)
+            }
+
             pwaDao.delete(pwa)
         }
     }

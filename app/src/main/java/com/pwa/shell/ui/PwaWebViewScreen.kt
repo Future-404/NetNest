@@ -172,6 +172,7 @@ fun PwaWebViewScreen(
         }
 
         onDispose {
+            CookieManager.getInstance().flush()
             window?.let { w ->
                 // Restore default transparent system bars
                 w.statusBarColor = android.graphics.Color.TRANSPARENT
