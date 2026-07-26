@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Message
 import android.util.Log
@@ -48,7 +49,6 @@ import androidx.compose.ui.unit.dp
 import com.pwa.shell.data.local.PwaEntity
 import com.pwa.shell.data.local.AppDatabase
 import com.pwa.shell.data.local.RunAt
-import com.pwa.shell.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -250,7 +250,9 @@ fun PwaWebViewScreen(
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     // Remote inspection must never be enabled in production builds.
-                    WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+                    WebView.setWebContentsDebuggingEnabled(
+                        (ctx.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                    )
 
                     // Keep first-party sessions while preventing cross-site cookie tracking.
                     CookieManager.getInstance().setAcceptCookie(true)
@@ -632,9 +634,8 @@ private fun configureSettings(webView: WebView, pwa: PwaEntity) {
 }
 
 private fun getFingerprintJs(pwa: PwaEntity): String {
-    val json = kotlinx.serialization.json.Json
-    val language = json.encodeToString(pwa.customLanguage)
-    val platform = json.encodeToString(pwa.customPlatform)
+    val language = org.json.JSONObject.quote(pwa.customLanguage)
+    val platform = org.json.JSONObject.quote(pwa.customPlatform)
     val width = pwa.screenWidth
     val height = pwa.screenHeight
     val dpr = pwa.deviceScaleFactor
@@ -763,7 +764,7 @@ private fun updateStatusBarFromWeb(view: WebView, useFullscreen: Boolean) {
 }
 
 private fun getSecuritySandboxJs(capabilityToken: String): String {
-    val encodedToken = kotlinx.serialization.json.Json.encodeToString(capabilityToken)
+    val encodedToken = org.json.JSONObject.quote(capabilityToken)
     return """
        (function() {
            if (window.__netnest_sandbox_injected) return;
