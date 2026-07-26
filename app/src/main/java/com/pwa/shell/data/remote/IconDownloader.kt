@@ -7,9 +7,14 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.security.MessageDigest
 
 class IconDownloader(private val okHttpClient: OkHttpClient) {
+
+    private companion object {
+        const val MAX_ICON_BYTES = 5L * 1024 * 1024
+    }
 
     suspend fun downloadIcon(context: Context, iconUrl: String): String? = withContext(Dispatchers.IO) {
         try {
@@ -17,9 +22,15 @@ class IconDownloader(private val okHttpClient: OkHttpClient) {
             okHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext null
                 val body = response.body ?: return@withContext null
+                if (body.contentLength() > MAX_ICON_BYTES) return@withContext null
+                val contentType = response.header("Content-Type")
+                    ?.substringBefore(';')
+                    ?.trim()
+                if (contentType != null && !contentType.startsWith("image/")) {
+                    return@withContext null
+                }
 
                 // Determine extension based on Content-Type or URL path
-                val contentType = response.header("Content-Type")
                 val extension = getExtension(iconUrl, contentType)
 
                 // Generate a unique filename using MD5 hash of the URL
@@ -32,7 +43,17 @@ class IconDownloader(private val okHttpClient: OkHttpClient) {
                 // Write bytes to file
                 body.byteStream().use { inputStream ->
                     FileOutputStream(destFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
+                    val buffer = ByteArray(8192)
+                    var total = 0L
+                    while (true) {
+                        val count = inputStream.read(buffer)
+                        if (count == -1) break
+                        total += count
+                        if (total > MAX_ICON_BYTES) {
+                            throw IOException("Icon exceeds $MAX_ICON_BYTES bytes")
+                        }
+                        outputStream.write(buffer, 0, count)
+                    }
                     }
                 }
                 destFile.absolutePath

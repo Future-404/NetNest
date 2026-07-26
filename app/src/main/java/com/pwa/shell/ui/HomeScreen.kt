@@ -230,7 +230,7 @@ fun HomeScreen(
                 EditPwaDialog(
                     pwa = pwa,
                     onDismiss = { showEditDialog = null },
-                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains ->
+                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains, customUserAgent, customLanguage, customPlatform, screenWidth, screenHeight, deviceScaleFactor ->
                         showEditDialog = null
                         viewModel.updatePwa(pwa.copy(
                             name = updatedName,
@@ -240,7 +240,13 @@ fun HomeScreen(
                             useDevConsole = useDevConsole,
                             useFullscreen = useFullscreen,
                             securityMode = securityMode,
-                            trustedDomains = trustedDomains
+                            trustedDomains = trustedDomains,
+                            customUserAgent = customUserAgent,
+                            customLanguage = customLanguage,
+                            customPlatform = customPlatform,
+                            screenWidth = screenWidth,
+                            screenHeight = screenHeight,
+                            deviceScaleFactor = deviceScaleFactor
                         ))
                     },
                     onManageScripts = {
@@ -595,7 +601,7 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String) -> Unit,
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String, customUserAgent: String?, customLanguage: String, customPlatform: String, screenWidth: Int, screenHeight: Int, deviceScaleFactor: Float) -> Unit,
     onManageScripts: () -> Unit
 ) {
     var name by remember { mutableStateOf(pwa.name) }
@@ -606,6 +612,12 @@ fun EditPwaDialog(
     var useFullscreen by remember { mutableStateOf(pwa.useFullscreen) }
     var isSecurityShieldEnabled by remember { mutableStateOf(pwa.securityMode != 0) }
     var trustedDomains by remember { mutableStateOf(pwa.trustedDomains) }
+    var customUserAgent by remember { mutableStateOf(pwa.customUserAgent ?: "") }
+    var customLanguage by remember { mutableStateOf(pwa.customLanguage) }
+    var customPlatform by remember { mutableStateOf(pwa.customPlatform) }
+    var screenWidth by remember { mutableStateOf(if (pwa.screenWidth > 0) pwa.screenWidth.toString() else "") }
+    var screenHeight by remember { mutableStateOf(if (pwa.screenHeight > 0) pwa.screenHeight.toString() else "") }
+    var deviceScaleFactor by remember { mutableStateOf(if (pwa.deviceScaleFactor > 0f) pwa.deviceScaleFactor.toString() else "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -621,7 +633,13 @@ fun EditPwaDialog(
                             useDevConsole,
                             useFullscreen,
                             if (isSecurityShieldEnabled) 1 else 0,
-                            trustedDomains
+                            trustedDomains,
+                            customUserAgent.trim().takeIf { it.isNotEmpty() },
+                            customLanguage.trim(),
+                            customPlatform.trim(),
+                            screenWidth.toIntOrNull()?.coerceIn(0, 10000) ?: 0,
+                            screenHeight.toIntOrNull()?.coerceIn(0, 10000) ?: 0,
+                            deviceScaleFactor.toFloatOrNull()?.coerceIn(0.1f, 8f) ?: 0f
                         )
                     }
                 }
@@ -723,6 +741,52 @@ fun EditPwaDialog(
                         placeholder = { Text("例如: api.openrouter.ai,api.openai.com") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Text("设备与浏览器指纹", style = MaterialTheme.typography.titleMedium)
+                Text("TLS 指纹由 Android WebView 控制，无法按应用修改。以下配置仅影响网页可见的浏览器参数。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                OutlinedTextField(
+                    value = customUserAgent,
+                    onValueChange = { customUserAgent = it },
+                    label = { Text("自定义 User-Agent（可选）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = customLanguage,
+                    onValueChange = { customLanguage = it },
+                    label = { Text("语言，例如 zh-CN") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = customPlatform,
+                    onValueChange = { customPlatform = it },
+                    label = { Text("平台，例如 Android") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = screenWidth,
+                        onValueChange = { screenWidth = it.filter(Char::isDigit) },
+                        label = { Text("宽") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = screenHeight,
+                        onValueChange = { screenHeight = it.filter(Char::isDigit) },
+                        label = { Text("高") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = deviceScaleFactor,
+                        onValueChange = { deviceScaleFactor = it.filter { char -> char.isDigit() || char == '.' } },
+                        label = { Text("DPR") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))

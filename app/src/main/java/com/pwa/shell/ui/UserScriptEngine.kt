@@ -67,30 +67,45 @@ object MatchPatternMatcher {
     }
 }
 
-fun buildInjectionScript(scripts: List<UserScriptEntity>, phase: RunAt): String {
+fun buildInjectionScript(
+    scripts: List<UserScriptEntity>,
+    phase: RunAt,
+    capabilityToken: String
+): String {
+    val encodedToken = Json.encodeToString(capabilityToken)
+    val body = scripts.joinToString("\n") { script ->
+        val encodedName = Json.encodeToString(script.name)
+        """
+        runScript(${script.id}, $encodedName, function() {
+            ${script.code}
+        });
+        """.trimIndent()
+    }
+
     val bridgeDefinitions = """
         (function() {
             const bridge = window.NetNestScriptBridge;
+            const capabilityToken = $encodedToken;
             if (bridge) {
                 delete window.NetNestScriptBridge; // Hide bridge from site scripts
             }
             window.__netnest_injected_scripts = window.__netnest_injected_scripts || {};
 
-            window.GM_addStyle = function(css) {
+            const GM_addStyle = function(css) {
                 const style = document.createElement('style');
                 style.textContent = css;
                 (document.head || document.documentElement).appendChild(style);
                 return style;
             };
-            window.GM_setValue = function(key, value) {
+            const GM_setValue = function(key, value) {
                 if (bridge) {
                     const valStr = value !== undefined ? JSON.stringify(value) : "null";
-                    bridge.setValue(String(key), valStr);
+                    bridge.setValue(capabilityToken, String(key), valStr);
                 }
             };
-            window.GM_getValue = function(key, defaultValue) {
+            const GM_getValue = function(key, defaultValue) {
                 if (bridge) {
-                    const raw = bridge.getValue(String(key));
+                    const raw = bridge.getValue(capabilityToken, String(key));
                     try {
                         return (raw !== undefined && raw !== null) ? JSON.parse(raw) : defaultValue;
                     } catch(e) {
@@ -99,14 +114,14 @@ fun buildInjectionScript(scripts: List<UserScriptEntity>, phase: RunAt): String 
                 }
                 return defaultValue;
             };
-            window.GM_deleteValue = function(key) {
+            const GM_deleteValue = function(key) {
                 if (bridge) {
-                    bridge.deleteValue(String(key));
+                    bridge.deleteValue(capabilityToken, String(key));
                 }
             };
-            window.GM_listValues = function() {
+            const GM_listValues = function() {
                 if (bridge) {
-                    return JSON.parse(bridge.listKeys());
+                    return JSON.parse(bridge.listKeys(capabilityToken));
                 }
                 return [];
             };
@@ -117,7 +132,7 @@ fun buildInjectionScript(scripts: List<UserScriptEntity>, phase: RunAt): String 
                     const original = console[level];
                     console[level] = function(...args) {
                         if (bridge && bridge.reportLog) {
-                            bridge.reportLog(level, args.map(String).join(' '));
+                            bridge.reportLog(capabilityToken, level, args.map(String).join(' '));
                         }
                         original.apply(console, args);
                     };
@@ -130,7 +145,7 @@ fun buildInjectionScript(scripts: List<UserScriptEntity>, phase: RunAt): String 
                 });
             }
 
-            window.__netnest_run_script = function(id, name, runFn) {
+            const runScript = function(id, name, runFn) {
                 const key = id + "_" + "${phase.name}";
                 if (!window.__netnest_injected_scripts[key]) {
                     window.__netnest_injected_scripts[key] = true;
@@ -141,41 +156,42 @@ fun buildInjectionScript(scripts: List<UserScriptEntity>, phase: RunAt): String 
                     }
                 }
             };
+
+            $body
         })();
     """.trimIndent()
-
-    val body = scripts.joinToString("\n") { script ->
-        """
-        window.__netnest_run_script(${script.id}, "${script.name.replace("\"", "\\\"")}", function() {
-            ${script.code}
-        });
-        """.trimIndent()
-    }
-    return bridgeDefinitions + "\n" + body
+    return bridgeDefinitions
 }
 
 class NetNestScriptBridge(
     private val pwaId: Long,
     private val dao: ScriptStorageDao,
+    capabilityToken: String,
     private val onLogReceived: (level: String, message: String) -> Unit = { _, _ -> }
 ) {
+    private val capabilityTokenBytes = capabilityToken.toByteArray(Charsets.UTF_8)
+
     @JavascriptInterface
-    fun setValue(key: String, value: String) {
+    fun setValue(token: String, key: String, value: String) {
+        if (!isAuthorized(token)) return
         dao.upsert(ScriptStorageEntity(pwaId, key, value))
     }
 
     @JavascriptInterface
-    fun getValue(key: String): String? {
+    fun getValue(token: String, key: String): String? {
+        if (!isAuthorized(token)) return null
         return dao.get(pwaId, key)?.storageValue
     }
 
     @JavascriptInterface
-    fun deleteValue(key: String) {
+    fun deleteValue(token: String, key: String) {
+        if (!isAuthorized(token)) return
         dao.delete(pwaId, key)
     }
 
     @JavascriptInterface
-    fun listKeys(): String {
+    fun listKeys(token: String): String {
+        if (!isAuthorized(token)) return "[]"
         return try {
             Json.encodeToString(dao.listKeys(pwaId))
         } catch (e: Exception) {
@@ -184,8 +200,16 @@ class NetNestScriptBridge(
     }
 
     @JavascriptInterface
-    fun reportLog(level: String, message: String) {
+    fun reportLog(token: String, level: String, message: String) {
+        if (!isAuthorized(token)) return
         onLogReceived(level, message)
+    }
+
+    private fun isAuthorized(token: String): Boolean {
+        return java.security.MessageDigest.isEqual(
+            capabilityTokenBytes,
+            token.toByteArray(Charsets.UTF_8)
+        )
     }
 }
 

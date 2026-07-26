@@ -1,10 +1,12 @@
 package com.pwa.shell.ui
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Message
 import android.util.Log
@@ -41,19 +43,19 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.unit.dp
 import com.pwa.shell.data.local.PwaEntity
 import com.pwa.shell.data.local.AppDatabase
-import com.pwa.shell.data.local.UserScriptEntity
 import com.pwa.shell.data.local.RunAt
-import com.pwa.shell.data.local.ScriptStorageDao
-import com.pwa.shell.data.local.UserScriptDao
+import com.pwa.shell.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.fillMaxWidth
+import java.util.UUID
 
 @Composable
 fun PwaWebViewScreen(
@@ -69,6 +71,8 @@ fun PwaWebViewScreen(
     var showSecurityDialog by remember { mutableStateOf(false) }
     var blockedUrl by remember { mutableStateOf("") }
     var currentCallback by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
+    var pendingWebPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
+    val bridgeCapabilityToken = remember(pwa.id) { UUID.randomUUID().toString() }
 
     val db = remember { AppDatabase.getDatabase(context) }
     val userScriptDao = remember { db.userScriptDao() }
@@ -89,7 +93,11 @@ fun PwaWebViewScreen(
                         MatchPatternMatcher.matches(currentUrl, it.matchPatterns)
                     }
                     if (stillMatching.isNotEmpty()) {
-                        val compiledJs = buildInjectionScript(stillMatching, phase)
+                        val compiledJs = buildInjectionScript(
+                            stillMatching,
+                            phase,
+                            bridgeCapabilityToken
+                        )
                         view.evaluateJavascript(compiledJs, null)
                     }
                 }
@@ -144,6 +152,27 @@ fun PwaWebViewScreen(
         uploadMessageCallback = null
     }
 
+    val webPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val request = pendingWebPermissionRequest
+        pendingWebPermissionRequest = null
+        if (request == null) return@rememberLauncherForActivityResult
+
+        val grantedResources = request.resources.filter { resource ->
+            val permission = androidPermissionForWebResource(resource)
+            permission != null && (
+                grants[permission] == true ||
+                    ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+                )
+        }
+        if (grantedResources.isEmpty()) {
+            request.deny()
+        } else {
+            request.grant(grantedResources.toTypedArray())
+        }
+    }
+
     // System Back Button Handling
     BackHandler {
         val wv = webView
@@ -173,6 +202,22 @@ fun PwaWebViewScreen(
 
         onDispose {
             CookieManager.getInstance().flush()
+            pendingWebPermissionRequest?.deny()
+            pendingWebPermissionRequest = null
+            currentCallback?.invoke(false)
+            currentCallback = null
+            webView?.apply {
+                stopLoading()
+                removeJavascriptInterface("NetNestSecurity")
+                removeJavascriptInterface("NetNestScriptBridge")
+                webChromeClient = null
+                webViewClient = WebViewClient()
+                loadUrl("about:blank")
+                clearHistory()
+                removeAllViews()
+                destroy()
+            }
+            webView = null
             window?.let { w ->
                 // Restore default transparent system bars
                 w.statusBarColor = android.graphics.Color.TRANSPARENT
@@ -204,16 +249,16 @@ fun PwaWebViewScreen(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
-                    // Enable remote web debugging for developer diagnostic profiling
-                    WebView.setWebContentsDebuggingEnabled(true)
+                    // Remote inspection must never be enabled in production builds.
+                    WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
 
-                    // Accept cookies & third party cookies configuration
+                    // Keep first-party sessions while preventing cross-site cookie tracking.
                     CookieManager.getInstance().setAcceptCookie(true)
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
 
                     // Add Security Sandbox Javascript Interface Bridge
                     addJavascriptInterface(
-                        SecurityBridge(pwa) { urlAndLeakType, callback ->
+                        SecurityBridge(pwa, bridgeCapabilityToken) { urlAndLeakType, callback ->
                             blockedUrl = urlAndLeakType
                             currentCallback = callback
                             showSecurityDialog = true
@@ -223,19 +268,23 @@ fun PwaWebViewScreen(
 
                     // Add User Script storage bridge
                     addJavascriptInterface(
-                        NetNestScriptBridge(pwa.id, scriptStorageDao) { level, message ->
+                        NetNestScriptBridge(
+                            pwa.id,
+                            scriptStorageDao,
+                            bridgeCapabilityToken
+                        ) { level, message ->
                             ScriptLogCollector.addLog(level, message)
                         },
                         "NetNestScriptBridge"
                     )
 
-                    configureSettings(this, pwa.useChromeUa)
+                    configureSettings(this, pwa)
                     
                     if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                         try {
                             androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
                                 this,
-                                getSecuritySandboxJs(),
+                                getFingerprintJs(pwa) + getSecuritySandboxJs(bridgeCapabilityToken),
                                 setOf("*")
                             )
                         } catch (e: Exception) {
@@ -247,7 +296,7 @@ fun PwaWebViewScreen(
                         override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                             super.onPageStarted(view, url, favicon)
                             if (view != null) {
-                                injectSecuritySandbox(view)
+                                injectSecuritySandbox(view, pwa, bridgeCapabilityToken)
                                 if (url != null) {
                                     injectScriptsForPhase(view, url, RunAt.DOCUMENT_START)
                                 }
@@ -260,7 +309,7 @@ fun PwaWebViewScreen(
                             CookieManager.getInstance().flush()
 
                             if (view != null) {
-                                injectSecuritySandbox(view)
+                                injectSecuritySandbox(view, pwa, bridgeCapabilityToken)
                                 if (url != null) {
                                     injectScriptsForPhase(view, url, RunAt.DOCUMENT_END)
                                     view.postDelayed({
@@ -356,12 +405,13 @@ fun PwaWebViewScreen(
                             isUserGesture: Boolean,
                             resultMsg: Message?
                         ): Boolean {
+                            if (!isUserGesture) return false
                             val mainWebView = view ?: return false
                             val context = mainWebView.context
                             val tempWebView = WebView(context)
                             
                             // Configure settings to match main WebView
-                            configureSettings(tempWebView, pwa.useChromeUa)
+                            configureSettings(tempWebView, pwa)
                             
                             tempWebView.webViewClient = object : WebViewClient() {
                                 override fun shouldOverrideUrlLoading(
@@ -422,8 +472,47 @@ fun PwaWebViewScreen(
 
                         // Web API Permission request bridge (Camera, Mic, Location)
                         override fun onPermissionRequest(request: PermissionRequest?) {
-                            val resources = request?.resources ?: return
-                            request.grant(resources)
+                            request ?: return
+                            if (
+                                pendingWebPermissionRequest != null ||
+                                !WebSecurityPolicy.isTrustedUrl(
+                                    request.origin.toString(),
+                                    pwa.url,
+                                    pwa.trustedDomains
+                                )
+                            ) {
+                                request.deny()
+                                return
+                            }
+
+                            val knownResources = request.resources.filter {
+                                androidPermissionForWebResource(it) != null
+                            }
+                            if (knownResources.isEmpty()) {
+                                request.deny()
+                                return
+                            }
+
+                            val missingPermissions = knownResources
+                                .mapNotNull(::androidPermissionForWebResource)
+                                .distinct()
+                                .filter {
+                                    ContextCompat.checkSelfPermission(context, it) !=
+                                        PackageManager.PERMISSION_GRANTED
+                                }
+
+                            if (missingPermissions.isEmpty()) {
+                                request.grant(knownResources.toTypedArray())
+                            } else {
+                                pendingWebPermissionRequest = request
+                                webPermissionLauncher.launch(missingPermissions.toTypedArray())
+                            }
+                        }
+
+                        override fun onPermissionRequestCanceled(request: PermissionRequest?) {
+                            if (pendingWebPermissionRequest === request) {
+                                pendingWebPermissionRequest = null
+                            }
                         }
 
                         // Input type="file" callback launcher
@@ -513,16 +602,16 @@ fun PwaWebViewScreen(
 }
 
 @SuppressLint("SetJavaScriptEnabled")
-private fun configureSettings(webView: WebView, useChromeUa: Boolean) {
+private fun configureSettings(webView: WebView, pwa: PwaEntity) {
     webView.settings.apply {
         javaScriptEnabled = true
         domStorageEnabled = true
         databaseEnabled = true
         javaScriptCanOpenWindowsAutomatically = true
         setSupportMultipleWindows(true) // Required for window.open popups
-        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-        allowFileAccess = true
-        allowContentAccess = true
+        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        allowFileAccess = false
+        allowContentAccess = false
         cacheMode = WebSettings.LOAD_DEFAULT
         mediaPlaybackRequiresUserGesture = false
         useWideViewPort = true
@@ -532,7 +621,9 @@ private fun configureSettings(webView: WebView, useChromeUa: Boolean) {
 
         // Custom User-Agent cleaner logic
         val defaultUa = WebSettings.getDefaultUserAgent(webView.context)
-        if (useChromeUa && defaultUa.isNotEmpty()) {
+        if (!pwa.customUserAgent.isNullOrBlank()) {
+            userAgentString = pwa.customUserAgent
+        } else if (pwa.useChromeUa && defaultUa.isNotEmpty()) {
             // Strip WebView signature '; wv' and version code to masquerade as standard mobile Chrome
             val cleanedUa = defaultUa.replace("Version/4.0 ", "").replace("; wv", "")
             userAgentString = cleanedUa
@@ -540,9 +631,35 @@ private fun configureSettings(webView: WebView, useChromeUa: Boolean) {
     }
 }
 
+private fun getFingerprintJs(pwa: PwaEntity): String {
+    val json = kotlinx.serialization.json.Json
+    val language = json.encodeToString(pwa.customLanguage)
+    val platform = json.encodeToString(pwa.customPlatform)
+    val width = pwa.screenWidth
+    val height = pwa.screenHeight
+    val dpr = pwa.deviceScaleFactor
+    return """
+        (function() {
+            try {
+                const language = $language;
+                const platform = $platform;
+                if (language) {
+                    Object.defineProperty(Navigator.prototype, 'language', { get: () => language, configurable: true });
+                    Object.defineProperty(Navigator.prototype, 'languages', { get: () => [language], configurable: true });
+                }
+                if (platform) {
+                    Object.defineProperty(Navigator.prototype, 'platform', { get: () => platform, configurable: true });
+                }
+                if ($width > 0) Object.defineProperty(Screen.prototype, 'width', { get: () => $width, configurable: true });
+                if ($height > 0) Object.defineProperty(Screen.prototype, 'height', { get: () => $height, configurable: true });
+                if ($dpr > 0) Object.defineProperty(window, 'devicePixelRatio', { get: () => $dpr, configurable: true });
+            } catch (_) {}
+        })();
+    """.trimIndent()
+}
+
 private fun handleUrlRedirection(view: WebView?, url: String): Boolean {
-    if (url.startsWith("http://") || url.startsWith("https://") || 
-        url.startsWith("about:") || url.startsWith("data:") || url.startsWith("blob:")) {
+    if (url.startsWith("https://") || url == "about:blank" || url.startsWith("blob:")) {
         return false // Handled natively inside the WebView
     }
     
@@ -645,11 +762,17 @@ private fun updateStatusBarFromWeb(view: WebView, useFullscreen: Boolean) {
     }
 }
 
-private fun getSecuritySandboxJs(): String {
+private fun getSecuritySandboxJs(capabilityToken: String): String {
+    val encodedToken = kotlinx.serialization.json.Json.encodeToString(capabilityToken)
     return """
        (function() {
            if (window.__netnest_sandbox_injected) return;
            window.__netnest_sandbox_injected = true;
+           const capabilityToken = $encodedToken;
+           const securityBridge = window.NetNestSecurity;
+           if (securityBridge) {
+               delete window.NetNestSecurity;
+           }
 
            function serializeBody(body) {
                if (!body) return "";
@@ -673,8 +796,13 @@ private fun getSecuritySandboxJs(): String {
                    const method = (init && init.method) || 'GET';
                    const body = (init && init.body) || '';
                    
-                   if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
-                       const decision = window.NetNestSecurity.auditRequest(url, method, serializeBody(body));
+                   if (securityBridge && securityBridge.auditRequest) {
+                       const decision = securityBridge.auditRequest(
+                           capabilityToken,
+                           url,
+                           method,
+                           serializeBody(body)
+                       );
                        if (decision === 'BLOCK') {
                            console.warn('[NetNest Sandbox] Blocked upload to: ' + url);
                            throw new TypeError('Failed to fetch: Request blocked by NetNest Security Sandbox.');
@@ -704,8 +832,13 @@ private fun getSecuritySandboxJs(): String {
                    const method = this._method || 'GET';
                    const reqBody = body || '';
                    
-                   if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
-                       const decision = window.NetNestSecurity.auditRequest(url, method, serializeBody(reqBody));
+                   if (securityBridge && securityBridge.auditRequest) {
+                       const decision = securityBridge.auditRequest(
+                           capabilityToken,
+                           url,
+                           method,
+                           serializeBody(reqBody)
+                       );
                        if (decision === 'BLOCK') {
                            console.warn('[NetNest Sandbox] Blocked XHR upload to: ' + url);
                            const errEvent = new ProgressEvent('error');
@@ -724,8 +857,13 @@ private fun getSecuritySandboxJs(): String {
                const originalSendBeacon = navigator.sendBeacon;
                navigator.sendBeacon = function(url, data) {
                    const reqBody = data || '';
-                   if (window.NetNestSecurity && window.NetNestSecurity.auditRequest) {
-                       const decision = window.NetNestSecurity.auditRequest(url, 'POST', serializeBody(reqBody));
+                   if (securityBridge && securityBridge.auditRequest) {
+                       const decision = securityBridge.auditRequest(
+                           capabilityToken,
+                           url,
+                           'POST',
+                           serializeBody(reqBody)
+                       );
                        if (decision === 'BLOCK') {
                            console.warn('[NetNest Sandbox] Blocked sendBeacon upload to: ' + url);
                            return false;
@@ -825,36 +963,30 @@ private fun getSecuritySandboxJs(): String {
     """.trimIndent()
 }
 
-private fun injectSecuritySandbox(webView: WebView) {
+private fun injectSecuritySandbox(webView: WebView, pwa: PwaEntity, capabilityToken: String) {
     if (!androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
-        webView.evaluateJavascript(getSecuritySandboxJs(), null)
+        webView.evaluateJavascript(getFingerprintJs(pwa) + getSecuritySandboxJs(capabilityToken), null)
     }
 }
 
 class SecurityBridge(
     private val pwa: PwaEntity,
+    capabilityToken: String,
     private val onShowBlockDialog: (urlAndLeakType: String, callback: (Boolean) -> Unit) -> Unit
 ) {
     private val dialogLock = Any()
+    private val capabilityTokenBytes = capabilityToken.toByteArray(Charsets.UTF_8)
 
     @android.webkit.JavascriptInterface
-    fun auditRequest(url: String, method: String, body: String): String {
+    fun auditRequest(token: String, url: String, method: String, body: String): String {
+        if (!isAuthorized(token)) return "BLOCK"
         if (pwa.securityMode == 0) return "ALLOW"
 
         val uri = Uri.parse(url)
         val host = uri.host ?: ""
         if (host.isEmpty()) return "ALLOW"
 
-        // Always trust PWA host itself
-        val pwaUri = Uri.parse(pwa.url)
-        val pwaHost = pwaUri.host ?: ""
-        if (host.equals(pwaHost, ignoreCase = true)) {
-            return "ALLOW"
-        }
-
-        // Check whitelisted trustedDomains
-        val whitelist = pwa.trustedDomains.split(",").map { it.trim().lowercase() }
-        if (whitelist.any { it.isNotEmpty() && (host.endsWith(it) || it.endsWith(host)) }) {
+        if (WebSecurityPolicy.isTrustedUrl(url, pwa.url, pwa.trustedDomains)) {
             return "ALLOW"
         }
 
@@ -904,6 +1036,21 @@ class SecurityBridge(
 
             return if (isAllowed) "ALLOW" else "BLOCK"
         }
+    }
+
+    private fun isAuthorized(token: String): Boolean {
+        return java.security.MessageDigest.isEqual(
+            capabilityTokenBytes,
+            token.toByteArray(Charsets.UTF_8)
+        )
+    }
+}
+
+private fun androidPermissionForWebResource(resource: String): String? {
+    return when (resource) {
+        PermissionRequest.RESOURCE_VIDEO_CAPTURE -> Manifest.permission.CAMERA
+        PermissionRequest.RESOURCE_AUDIO_CAPTURE -> Manifest.permission.RECORD_AUDIO
+        else -> null
     }
 }
 

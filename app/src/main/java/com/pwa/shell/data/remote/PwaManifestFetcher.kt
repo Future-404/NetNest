@@ -9,6 +9,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
 import java.net.URL
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 
 @Serializable
 data class PwaFetchResult(
@@ -35,6 +37,10 @@ private data class PwaManifestIcon(
 )
 
 class PwaManifestFetcher(private val okHttpClient: OkHttpClient) {
+
+    private companion object {
+        const val MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+    }
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -93,7 +99,7 @@ class PwaManifestFetcher(private val okHttpClient: OkHttpClient) {
         val request = Request.Builder().url(url).build()
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw Exception("Failed to fetch HTML: ${response.code}")
-            return response.body?.string() ?: ""
+            return response.body?.let { readLimited(it.byteStream()) } ?: ""
         }
     }
 
@@ -101,7 +107,25 @@ class PwaManifestFetcher(private val okHttpClient: OkHttpClient) {
         val request = Request.Builder().url(url).build()
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw Exception("Failed to fetch manifest: ${response.code}")
-            return response.body?.string() ?: ""
+            return response.body?.let { readLimited(it.byteStream()) } ?: ""
+        }
+    }
+
+    private fun readLimited(input: java.io.InputStream): String {
+        input.use {
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            var total = 0
+            while (true) {
+                val count = it.read(buffer)
+                if (count == -1) break
+                total += count
+                if (total > MAX_DOCUMENT_BYTES) {
+                    throw IOException("Response exceeds $MAX_DOCUMENT_BYTES bytes")
+                }
+                output.write(buffer, 0, count)
+            }
+            return output.toString(Charsets.UTF_8.name())
         }
     }
 
