@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ApplicationInfo
 import android.net.Uri
+import android.os.Build
 import android.os.Message
 import android.util.Log
 import android.webkit.*
@@ -122,9 +123,85 @@ fun PwaWebViewScreen(
     var blockedLeakType by remember { mutableStateOf("") }
     var currentCallback by remember { mutableStateOf<((SecurityDecision) -> Unit)?>(null) }
     var pendingWebPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
+    val downloadQueue = remember(pwa.id) { mutableStateListOf<BrowserDownloadRequest>() }
+    var pendingLegacyDownload by remember { mutableStateOf<BrowserDownloadRequest?>(null) }
     val bridgeCapabilityToken = remember(pwa.id) { UUID.randomUUID().toString() }
     val securityPolicyStore = remember(pwa.id) { SecurityPolicyStore(pwa) }
     LaunchedEffect(pwa) { securityPolicyStore.update(pwa) }
+
+    fun queueDownload(request: BrowserDownloadRequest) {
+        val alreadyQueued = downloadQueue.any {
+            it.url == request.url && it.suggestedFileName == request.suggestedFileName
+        }
+        if (!alreadyQueued) downloadQueue.add(request)
+    }
+
+    val webDataDownloadBridge = remember(pwa.id) {
+        WebDataDownloadBridge(
+            context = context.applicationContext,
+            capabilityToken = bridgeCapabilityToken,
+            onRequested = { request -> queueDownload(request) },
+            onCompleted = { fileName ->
+                Toast.makeText(
+                    context,
+                    "已保存到 Download/NetNest/$fileName",
+                    Toast.LENGTH_LONG
+                ).show()
+            },
+            onFailed = { message ->
+                Toast.makeText(context, "下载失败：$message", Toast.LENGTH_LONG).show()
+            }
+        )
+    }
+
+    val startConfirmedDownload: (BrowserDownloadRequest) -> Unit = { request ->
+        runCatching {
+            when (request.kind) {
+                BrowserDownloadKind.NETWORK -> {
+                    enqueueNetworkDownload(context, request)
+                    Toast.makeText(
+                        context,
+                        "已加入系统下载队列：${request.suggestedFileName}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                BrowserDownloadKind.WEB_DATA -> {
+                    val activeWebView = webView ?: error("网页已关闭")
+                    val grantId = UUID.randomUUID().toString()
+                    webDataDownloadBridge.authorize(grantId)
+                    try {
+                        activeWebView.evaluateJavascript(
+                            buildWebDataDownloadStartScript(grantId, request)
+                        ) { result ->
+                            if (result != "true") {
+                                webDataDownloadBridge.revoke(grantId)
+                                buildWebDataDownloadCancelScript(request)
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.let { activeWebView.evaluateJavascript(it, null) }
+                                Toast.makeText(
+                                    context,
+                                    "下载失败：网页下载通道不可用，请刷新页面后重试",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    } catch (error: Exception) {
+                        webDataDownloadBridge.revoke(grantId)
+                        buildWebDataDownloadCancelScript(request)
+                            .takeIf { it.isNotEmpty() }
+                            ?.let { activeWebView.evaluateJavascript(it, null) }
+                        throw error
+                    }
+                }
+            }
+        }.onFailure {
+            Toast.makeText(
+                context,
+                "无法开始下载：${it.localizedMessage ?: "未知错误"}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     val db = remember { AppDatabase.getDatabase(context) }
     val userScriptDao = remember { db.userScriptDao() }
@@ -204,6 +281,25 @@ fun PwaWebViewScreen(
         uploadMessageCallback = null
     }
 
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val request = pendingLegacyDownload
+        pendingLegacyDownload = null
+        if (granted && request != null) {
+            startConfirmedDownload(request)
+        } else if (request != null) {
+            buildWebDataDownloadCancelScript(request)
+                .takeIf { it.isNotEmpty() }
+                ?.let { webView?.evaluateJavascript(it, null) }
+            Toast.makeText(
+                context,
+                "未授予存储权限，无法保存到系统下载目录",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     val webPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -258,10 +354,14 @@ fun PwaWebViewScreen(
             pendingWebPermissionRequest = null
             currentCallback?.invoke(SecurityDecision.BLOCK_ONCE)
             currentCallback = null
+            webDataDownloadBridge.cancelAll()
+            downloadQueue.clear()
+            pendingLegacyDownload = null
             webView?.apply {
                 stopLoading()
                 removeJavascriptInterface("NetNestSecurity")
                 removeJavascriptInterface("NetNestScriptBridge")
+                removeJavascriptInterface("NetNestDownload")
                 webChromeClient = null
                 webViewClient = WebViewClient()
                 loadUrl("about:blank")
@@ -321,6 +421,11 @@ fun PwaWebViewScreen(
                         "NetNestSecurity"
                     )
 
+                    addJavascriptInterface(
+                        webDataDownloadBridge,
+                        "NetNestDownload"
+                    )
+
                     // Add User Script storage bridge
                     addJavascriptInterface(
                         NetNestScriptBridge(
@@ -339,7 +444,9 @@ fun PwaWebViewScreen(
                         try {
                             androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
                                 this,
-                                getFingerprintJs(pwa) + getSecuritySandboxJs(bridgeCapabilityToken),
+                                getFingerprintJs(pwa) +
+                                    getSecuritySandboxJs(bridgeCapabilityToken) +
+                                    getWebDataDownloadSupportJs(bridgeCapabilityToken),
                                 setOf("*")
                             )
                         } catch (e: Exception) {
@@ -467,6 +574,28 @@ fun PwaWebViewScreen(
                             
                             // Configure settings to match main WebView
                             configureSettings(tempWebView, pwa)
+                            tempWebView.setDownloadListener {
+                                    url, userAgent, contentDisposition, mimeType, contentLength ->
+                                val request = createBrowserDownloadRequest(
+                                    url = url,
+                                    userAgent = userAgent,
+                                    contentDisposition = contentDisposition,
+                                    mimeType = mimeType,
+                                    contentLength = contentLength,
+                                    referer = tempWebView.url
+                                )
+                                if (request?.kind == BrowserDownloadKind.NETWORK) {
+                                    queueDownload(request)
+                                    tempWebView.destroy()
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        "该弹窗生成的网页文件暂时无法下载",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    tempWebView.destroy()
+                                }
+                            }
                             
                             tempWebView.webViewClient = object : WebViewClient() {
                                 override fun shouldOverrideUrlLoading(
@@ -594,6 +723,26 @@ fun PwaWebViewScreen(
                         }
                     }
 
+                    setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
+                        val request = createBrowserDownloadRequest(
+                            url = url,
+                            userAgent = userAgent,
+                            contentDisposition = contentDisposition,
+                            mimeType = mimeType,
+                            contentLength = contentLength,
+                            referer = this.url
+                        )
+                        if (request == null) {
+                            Toast.makeText(
+                                context,
+                                "不支持的下载地址",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } else {
+                            queueDownload(request)
+                        }
+                    }
+
                     loadUrl(pwa.url)
                     webView = this
                 }
@@ -604,6 +753,57 @@ fun PwaWebViewScreen(
                 Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)
             }
         )
+
+        downloadQueue.firstOrNull()?.takeIf { !showSecurityDialog }?.let { request ->
+            fun dismissDownload() {
+                downloadQueue.remove(request)
+                buildWebDataDownloadCancelScript(request)
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { webView?.evaluateJavascript(it, null) }
+            }
+
+            fun confirmDownload() {
+                downloadQueue.remove(request)
+                val needsLegacyPermission =
+                    Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.WRITE_EXTERNAL_STORAGE
+                        ) != PackageManager.PERMISSION_GRANTED
+                if (needsLegacyPermission) {
+                    pendingLegacyDownload = request
+                    storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                } else {
+                    startConfirmedDownload(request)
+                }
+            }
+
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { dismissDownload() },
+                title = { Text("开始下载？") },
+                text = {
+                    androidx.compose.foundation.layout.Column(
+                        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("来源：${pwa.name}")
+                        Text("文件：${request.suggestedFileName}")
+                        Text("类型：${request.mimeType}")
+                        Text("大小：${formatDownloadSize(request.contentLength)}")
+                        Text("保存到：Download/NetNest")
+                    }
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = { confirmDownload() }) {
+                        Text("开始下载")
+                    }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { dismissDownload() }) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
 
         // Privacy Security Sandbox Warning Dialog
         if (showSecurityDialog) {
@@ -1035,7 +1235,12 @@ private fun getSecuritySandboxJs(capabilityToken: String): String {
 
 private fun injectSecuritySandbox(webView: WebView, pwa: PwaEntity, capabilityToken: String) {
     if (!androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
-        webView.evaluateJavascript(getFingerprintJs(pwa) + getSecuritySandboxJs(capabilityToken), null)
+        webView.evaluateJavascript(
+            getFingerprintJs(pwa) +
+                getSecuritySandboxJs(capabilityToken) +
+                getWebDataDownloadSupportJs(capabilityToken),
+            null
+        )
     }
 }
 
