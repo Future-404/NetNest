@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
-import java.io.File
 
 class MainViewModel(context: Context) : ViewModel() {
 
@@ -83,20 +82,32 @@ class MainViewModel(context: Context) : ViewModel() {
 
     fun updatePwa(pwa: PwaEntity) {
         viewModelScope.launch {
+            val previous = pwaDao.getAllPwasOnce().firstOrNull { it.id == pwa.id }
             pwaDao.update(pwa)
+            if (
+                previous != null &&
+                (previous.name != pwa.name || previous.iconPath != pwa.iconPath)
+            ) {
+                runCatching { updatePinnedPwaShortcut(appContext, pwa) }
+                    .onFailure {
+                        Log.e("MainViewModel", "Failed to update shortcut for PWA ${pwa.id}", it)
+                    }
+            }
+            previous?.iconPath
+                ?.takeIf { it != pwa.iconPath }
+                ?.let { deleteIconIfUnreferenced(it) }
         }
+    }
+
+    suspend fun downloadWebsiteIcon(url: String): Result<String> = runCatching {
+        val result = fetcher.fetchPwaInfo(url)
+        val iconUrl = result.iconUrl ?: error("该网站没有提供可用图标")
+        downloader.downloadIcon(appContext, iconUrl)
+            ?: error("网站图标下载失败")
     }
 
     fun deletePwa(pwa: PwaEntity) {
         viewModelScope.launch {
-            // Delete local icon cache
-            if (pwa.iconPath.isNotEmpty()) {
-                val file = File(pwa.iconPath)
-                if (file.exists()) {
-                    file.delete()
-                }
-            }
-            
             // WebView cookies/storage are process-global. Only clear them when no other
             // configured PWA could be using the same host or a parent/child subdomain.
             try {
@@ -143,6 +154,11 @@ class MainViewModel(context: Context) : ViewModel() {
             }
 
             pwaDao.delete(pwa)
+            runCatching { disablePinnedPwaShortcut(appContext, pwa.id) }
+                .onFailure {
+                    Log.e("MainViewModel", "Failed to disable shortcut for PWA ${pwa.id}", it)
+                }
+            deleteIconIfUnreferenced(pwa.iconPath)
             runCatching { clearPwaNotificationData(appContext, pwa) }
                 .onFailure {
                     Log.e(
@@ -152,6 +168,12 @@ class MainViewModel(context: Context) : ViewModel() {
                     )
                 }
         }
+    }
+
+    private suspend fun deleteIconIfUnreferenced(iconPath: String) {
+        if (iconPath.isBlank()) return
+        val stillReferenced = pwaDao.getAllPwasOnce().any { it.iconPath == iconPath }
+        if (!stillReferenced) PwaIconManager.deleteManagedIcon(appContext, iconPath)
     }
 
     private fun hostsShareCookieScope(first: String, second: String): Boolean {

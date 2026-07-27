@@ -107,6 +107,9 @@ class SecurityPolicyStore(initial: PwaEntity) {
     }
 }
 
+// The registered bridge classes expose only explicitly annotated methods. Lint cannot
+// follow their concrete types through Compose's generic remember() state holder.
+@SuppressLint("JavascriptInterface")
 @Composable
 fun PwaWebViewScreen(
     pwa: PwaEntity,
@@ -135,6 +138,15 @@ fun PwaWebViewScreen(
     val downloadQueue = remember(pwa.id) { mutableStateListOf<BrowserDownloadRequest>() }
     var pendingLegacyDownload by remember { mutableStateOf<BrowserDownloadRequest?>(null) }
     val bridgeCapabilityToken = remember(pwa.id) { UUID.randomUUID().toString() }
+    val storagePersistenceNoticeBridge = remember(pwa.id) {
+        StoragePersistenceNoticeBridge(bridgeCapabilityToken) {
+            Toast.makeText(
+                context.applicationContext,
+                STORAGE_PERSISTENCE_UNSUPPORTED_MESSAGE,
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
     val securityPolicyStore = remember(pwa.id) { SecurityPolicyStore(pwa) }
     val notificationPermissionStore = remember {
         PwaNotificationPermissionStore(context.applicationContext)
@@ -448,6 +460,7 @@ fun PwaWebViewScreen(
                 removeJavascriptInterface("NetNestScriptBridge")
                 removeJavascriptInterface("NetNestDownload")
                 removeJavascriptInterface("NetNestNotification")
+                removeJavascriptInterface("NetNestStoragePersistence")
                 webChromeClient = null
                 webViewClient = WebViewClient()
                 loadUrl("about:blank")
@@ -517,6 +530,11 @@ fun PwaWebViewScreen(
                         "NetNestNotification"
                     )
 
+                    addJavascriptInterface(
+                        storagePersistenceNoticeBridge,
+                        "NetNestStoragePersistence"
+                    )
+
                     // Add User Script storage bridge
                     addJavascriptInterface(
                         NetNestScriptBridge(
@@ -537,7 +555,8 @@ fun PwaWebViewScreen(
                                 this,
                                 getFingerprintJs(pwa) +
                                     getSecuritySandboxJs(bridgeCapabilityToken) +
-                                    getWebDataDownloadSupportJs(bridgeCapabilityToken),
+                                    getWebDataDownloadSupportJs(bridgeCapabilityToken) +
+                                    getStoragePersistenceNoticeJs(bridgeCapabilityToken),
                                 setOf("*")
                             )
                             val notificationOrigins = notificationAllowedOriginRules(pwa.url)
@@ -1438,7 +1457,8 @@ private fun injectSecuritySandbox(webView: WebView, pwa: PwaEntity, capabilityTo
         webView.evaluateJavascript(
             getFingerprintJs(pwa) +
                 getSecuritySandboxJs(capabilityToken) +
-                getWebDataDownloadSupportJs(capabilityToken),
+                getWebDataDownloadSupportJs(capabilityToken) +
+                getStoragePersistenceNoticeJs(capabilityToken),
             null
         )
     }

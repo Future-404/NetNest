@@ -9,6 +9,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.UUID
 
 class IconDownloader(private val okHttpClient: OkHttpClient) {
 
@@ -33,8 +34,8 @@ class IconDownloader(private val okHttpClient: OkHttpClient) {
                 // Determine extension based on Content-Type or URL path
                 val extension = getExtension(iconUrl, contentType)
 
-                // Generate a unique filename using MD5 hash of the URL
-                val filename = "${md5(iconUrl)}.$extension"
+                // Keep a unique file per PWA so replacing/deleting one icon cannot affect another.
+                val filename = "${md5(iconUrl)}_${UUID.randomUUID()}.$extension"
                 val destFile = File(context.filesDir, "pwa_icons/$filename")
                 
                 // Ensure parent directories exist

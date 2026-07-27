@@ -1,6 +1,9 @@
 package com.pwa.shell.ui
 
 import android.content.Context
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -56,6 +59,7 @@ fun HomeScreen(
     val context = LocalContext.current
     val pwas by viewModel.pwaList.collectAsState(initial = emptyList())
     val uiState by viewModel.uiState.collectAsState()
+    val homeScope = rememberCoroutineScope()
 
     var showAddDialog by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf<PwaEntity?>(null) }
@@ -135,6 +139,23 @@ fun HomeScreen(
                             onClick = { onPwaClick(pwa) },
                             onDelete = { showDeleteConfirmDialog = pwa },
                             onEdit = { showEditDialog = pwa },
+                            onAddToHomeScreen = {
+                                homeScope.launch {
+                                    val message = when (
+                                        requestPinnedPwaShortcut(context.applicationContext, pwa)
+                                    ) {
+                                        PinPwaShortcutResult.REQUESTED ->
+                                            "请在系统弹窗中确认添加到桌面"
+                                        PinPwaShortcutResult.ALREADY_PINNED ->
+                                            "桌面图标已存在，并已更新"
+                                        PinPwaShortcutResult.UNSUPPORTED ->
+                                            "当前桌面启动器不支持添加图标"
+                                        PinPwaShortcutResult.FAILED ->
+                                            "无法请求添加桌面图标"
+                                    }
+                                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                }
+                            },
                             onMove = { direction ->
                                 val mutablePwas = pwas.toMutableList()
                                 val targetIndex = index + direction
@@ -241,11 +262,12 @@ fun HomeScreen(
                 EditPwaDialog(
                     pwa = pwa,
                     onDismiss = { showEditDialog = null },
-                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, securityPromptEnabled, trustedDomains, customUserAgent, customLanguage, customPlatform, screenWidth, screenHeight, deviceScaleFactor ->
+                    onConfirm = { updatedName, updatedUrl, updatedIconPath, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, securityPromptEnabled, trustedDomains, customUserAgent, customLanguage, customPlatform, screenWidth, screenHeight, deviceScaleFactor ->
                         showEditDialog = null
                         viewModel.updatePwa(pwa.copy(
                             name = updatedName,
                             url = updatedUrl,
+                            iconPath = updatedIconPath,
                             themeColor = updatedTheme,
                             useChromeUa = useChromeUa,
                             useDevConsole = useDevConsole,
@@ -260,6 +282,9 @@ fun HomeScreen(
                             screenHeight = screenHeight,
                             deviceScaleFactor = deviceScaleFactor
                         ))
+                    },
+                    onReloadWebsiteIcon = { editedUrl ->
+                        viewModel.downloadWebsiteIcon(editedUrl)
                     },
                     onManageScripts = {
                         showEditDialog = null
@@ -313,6 +338,7 @@ fun PwaGridItem(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
+    onAddToHomeScreen: () -> Unit,
     onMove: (Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -385,6 +411,13 @@ fun PwaGridItem(
                     onClick = {
                         expanded = false
                         onEdit()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("添加到桌面") },
+                    onClick = {
+                        expanded = false
+                        onAddToHomeScreen()
                     }
                 )
 
@@ -614,7 +647,8 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, securityPromptEnabled: Boolean, trustedDomains: String, customUserAgent: String?, customLanguage: String, customPlatform: String, screenWidth: Int, screenHeight: Int, deviceScaleFactor: Float) -> Unit,
+    onConfirm: (name: String, url: String, iconPath: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, securityPromptEnabled: Boolean, trustedDomains: String, customUserAgent: String?, customLanguage: String, customPlatform: String, screenWidth: Int, screenHeight: Int, deviceScaleFactor: Float) -> Unit,
+    onReloadWebsiteIcon: suspend (url: String) -> Result<String>,
     onManageScripts: () -> Unit
 ) {
     val context = LocalContext.current
@@ -626,6 +660,10 @@ fun EditPwaDialog(
     }
     var name by remember { mutableStateOf(pwa.name) }
     var url by remember { mutableStateOf(pwa.url) }
+    var iconPath by remember { mutableStateOf(pwa.iconPath) }
+    var iconLoading by remember { mutableStateOf(false) }
+    var iconError by remember { mutableStateOf<String?>(null) }
+    var iconCommitted by remember { mutableStateOf(false) }
     var themeColor by remember { mutableStateOf(pwa.themeColor ?: "") }
     var useChromeUa by remember { mutableStateOf(pwa.useChromeUa) }
     var useDevConsole by remember { mutableStateOf(pwa.useDevConsole) }
@@ -654,6 +692,44 @@ fun EditPwaDialog(
     var showDiscardConfirmation by remember { mutableStateOf(false) }
     val editorListState = rememberLazyListState()
     val editorScope = rememberCoroutineScope()
+    val iconImageLoader = remember {
+        ImageLoader.Builder(context)
+            .components { add(SvgDecoder.Factory()) }
+            .build()
+    }
+    fun replaceDraftIcon(updatedPath: String) {
+        if (iconPath != pwa.iconPath) {
+            PwaIconManager.deleteManagedIcon(context, iconPath)
+        }
+        iconPath = updatedPath
+    }
+    val iconPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            editorScope.launch {
+                iconLoading = true
+                iconError = null
+                PwaIconManager.importCustomIcon(context.applicationContext, uri)
+                    .onSuccess { importedPath ->
+                        replaceDraftIcon(importedPath)
+                    }
+                    .onFailure {
+                        iconError = it.localizedMessage ?: "图标导入失败"
+                    }
+                iconLoading = false
+            }
+        }
+    }
+    val latestIconPath by rememberUpdatedState(iconPath)
+    val latestIconCommitted by rememberUpdatedState(iconCommitted)
+    DisposableEffect(pwa.id) {
+        onDispose {
+            if (!latestIconCommitted && latestIconPath != pwa.iconPath) {
+                PwaIconManager.deleteManagedIcon(context, latestIconPath)
+            }
+        }
+    }
 
     val nameInvalid = name.isBlank()
     val urlInvalid = !isValidWebUrl(url)
@@ -667,6 +743,7 @@ fun EditPwaDialog(
     val hasUnsavedChanges =
         name != pwa.name ||
             url != pwa.url ||
+            iconPath != pwa.iconPath ||
             themeColor != pwa.themeColor.orEmpty() ||
             useChromeUa != pwa.useChromeUa ||
             useDevConsole != pwa.useDevConsole ||
@@ -695,9 +772,11 @@ fun EditPwaDialog(
             editorScope.launch { editorListState.animateScrollToItem(0) }
             return
         }
+        iconCommitted = true
         onConfirm(
             name.trim(),
             url.trim(),
+            iconPath,
             themeColor.trim().takeIf { it.isNotEmpty() },
             useChromeUa,
             useDevConsole,
@@ -799,6 +878,102 @@ fun EditPwaDialog(
                             title = "基础信息",
                             description = "应用名称、地址和显示方式"
                         ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(76.dp)
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(getSoftColor(url)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (iconPath.isNotBlank() && File(iconPath).isFile) {
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(context)
+                                                .data(File(iconPath))
+                                                .crossfade(true)
+                                                .build(),
+                                            imageLoader = iconImageLoader,
+                                            contentDescription = "应用图标预览",
+                                            contentScale = ContentScale.Fit,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Text(
+                                            text = name.take(1).uppercase().ifEmpty { "P" },
+                                            fontSize = 28.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF49454F)
+                                        )
+                                    }
+                                    if (iconLoading) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                            shape = RoundedCornerShape(20.dp),
+                                            modifier = Modifier.fillMaxSize()
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(28.dp),
+                                                    strokeWidth = 3.dp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            iconPickerLauncher.launch(arrayOf("image/*"))
+                                        },
+                                        enabled = !iconLoading,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("选择自定义图标")
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (!isValidWebUrl(url)) {
+                                                iconError = "请先填写有效的网站 URL"
+                                            } else {
+                                                editorScope.launch {
+                                                    iconLoading = true
+                                                    iconError = null
+                                                    onReloadWebsiteIcon(url.trim())
+                                                        .onSuccess(::replaceDraftIcon)
+                                                        .onFailure {
+                                                            iconError = it.localizedMessage
+                                                                ?: "网站图标获取失败"
+                                                        }
+                                                    iconLoading = false
+                                                }
+                                            }
+                                        },
+                                        enabled = !iconLoading,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("恢复网站图标")
+                                    }
+                                }
+                            }
+                            Text(
+                                text = "图片将安全复制到 NetNest，仅用于该 PWA 和桌面快捷方式。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            iconError?.let {
+                                Text(
+                                    text = it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                             OutlinedTextField(
                                 value = name,
                                 onValueChange = { name = it },
