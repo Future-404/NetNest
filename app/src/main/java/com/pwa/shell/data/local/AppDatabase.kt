@@ -11,7 +11,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [PwaEntity::class, UserScriptEntity::class, ScriptStorageEntity::class],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(StringListConverter::class)
@@ -44,6 +44,12 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `pwas` ADD COLUMN `screenWidth` INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE `pwas` ADD COLUMN `screenHeight` INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE `pwas` ADD COLUMN `deviceScaleFactor` REAL NOT NULL DEFAULT 0.0")
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `pwas` ADD COLUMN `securityPromptEnabled` INTEGER NOT NULL DEFAULT 1")
             }
         }
 
@@ -137,7 +143,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_3_6,
                     MIGRATION_4_6,
                     MIGRATION_5_6,
-                    MIGRATION_6_7
+                    MIGRATION_6_7,
+                    MIGRATION_7_8
                 )
                 .build()
                 INSTANCE = instance

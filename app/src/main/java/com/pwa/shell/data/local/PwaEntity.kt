@@ -17,6 +17,7 @@ data class PwaEntity(
     val useDevConsole: Boolean = false,
     val useFullscreen: Boolean = false,
     val securityMode: Int = 1, // 0: Disabled, 1: Block & Warn, 2: Silent Block
+    val securityPromptEnabled: Boolean = true,
     val trustedDomains: String = "", // Comma-separated trusted hosts
     val customUserAgent: String? = null,
     val customLanguage: String = "",

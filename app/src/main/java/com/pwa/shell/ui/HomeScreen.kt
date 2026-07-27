@@ -230,7 +230,7 @@ fun HomeScreen(
                 EditPwaDialog(
                     pwa = pwa,
                     onDismiss = { showEditDialog = null },
-                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains, customUserAgent, customLanguage, customPlatform, screenWidth, screenHeight, deviceScaleFactor ->
+                    onConfirm = { updatedName, updatedUrl, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, securityPromptEnabled, trustedDomains, customUserAgent, customLanguage, customPlatform, screenWidth, screenHeight, deviceScaleFactor ->
                         showEditDialog = null
                         viewModel.updatePwa(pwa.copy(
                             name = updatedName,
@@ -240,6 +240,7 @@ fun HomeScreen(
                             useDevConsole = useDevConsole,
                             useFullscreen = useFullscreen,
                             securityMode = securityMode,
+                            securityPromptEnabled = securityPromptEnabled,
                             trustedDomains = trustedDomains,
                             customUserAgent = customUserAgent,
                             customLanguage = customLanguage,
@@ -601,7 +602,7 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String, customUserAgent: String?, customLanguage: String, customPlatform: String, screenWidth: Int, screenHeight: Int, deviceScaleFactor: Float) -> Unit,
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, securityPromptEnabled: Boolean, trustedDomains: String, customUserAgent: String?, customLanguage: String, customPlatform: String, screenWidth: Int, screenHeight: Int, deviceScaleFactor: Float) -> Unit,
     onManageScripts: () -> Unit
 ) {
     var name by remember { mutableStateOf(pwa.name) }
@@ -611,6 +612,7 @@ fun EditPwaDialog(
     var useDevConsole by remember { mutableStateOf(pwa.useDevConsole) }
     var useFullscreen by remember { mutableStateOf(pwa.useFullscreen) }
     var isSecurityShieldEnabled by remember { mutableStateOf(pwa.securityMode != 0) }
+    var securityPromptEnabled by remember { mutableStateOf(pwa.securityPromptEnabled) }
     var trustedDomains by remember { mutableStateOf(pwa.trustedDomains) }
     var customUserAgent by remember { mutableStateOf(pwa.customUserAgent ?: "") }
     var customLanguage by remember { mutableStateOf(pwa.customLanguage) }
@@ -633,6 +635,7 @@ fun EditPwaDialog(
                             useDevConsole,
                             useFullscreen,
                             if (isSecurityShieldEnabled) 1 else 0,
+                            securityPromptEnabled,
                             trustedDomains,
                             customUserAgent.trim().takeIf { it.isNotEmpty() },
                             customLanguage.trim(),
@@ -734,6 +737,17 @@ fun EditPwaDialog(
                     )
                 }
                 if (isSecurityShieldEnabled) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text("安全拦截弹窗", style = MaterialTheme.typography.bodyMedium)
+                            Text("关闭后自动拦截疑似泄露请求，不再弹窗提醒。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        }
+                        Switch(checked = securityPromptEnabled, onCheckedChange = { securityPromptEnabled = it })
+                    }
                     OutlinedTextField(
                         value = trustedDomains,
                         onValueChange = { trustedDomains = it },

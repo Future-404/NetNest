@@ -56,6 +56,54 @@ import java.io.File
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.fillMaxWidth
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+
+enum class SecurityDecision { ALLOW_ONCE, BLOCK_ONCE, TRUST_DOMAIN, BLOCK_ALL }
+
+class SecurityPolicyStore(initial: PwaEntity) {
+    private data class CachedDecision(val decision: SecurityDecision, val expiresAt: Long)
+    @Volatile private var policy: PwaEntity = initial
+    private val cache = mutableMapOf<String, CachedDecision>()
+
+    fun snapshot(): PwaEntity = policy
+
+    @Synchronized
+    fun update(updated: PwaEntity) {
+        policy = updated
+    }
+
+    @Synchronized
+    fun remember(host: String, leakType: String, decision: SecurityDecision) {
+        cache["$host|$leakType"] = CachedDecision(decision, System.currentTimeMillis() + 10_000)
+    }
+
+    @Synchronized
+    fun cached(host: String, leakType: String): SecurityDecision? {
+        val key = "$host|$leakType"
+        val entry = cache[key] ?: return null
+        if (entry.expiresAt <= System.currentTimeMillis()) {
+            cache.remove(key)
+            return null
+        }
+        return entry.decision
+    }
+
+    @Synchronized
+    fun trustDomain(host: String) {
+        val current = policy
+        val domains = current.trustedDomains.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        if (domains.none { it.equals(host, ignoreCase = true) }) {
+            policy = current.copy(trustedDomains = (domains + host).joinToString(","))
+        }
+    }
+
+    @Synchronized
+    fun blockAll() {
+        policy = policy.copy(securityMode = 2)
+        cache.clear()
+    }
+}
 
 @Composable
 fun PwaWebViewScreen(
@@ -70,9 +118,12 @@ fun PwaWebViewScreen(
     var webView: WebView? by remember { mutableStateOf(null) }
     var showSecurityDialog by remember { mutableStateOf(false) }
     var blockedUrl by remember { mutableStateOf("") }
-    var currentCallback by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
+    var blockedLeakType by remember { mutableStateOf("") }
+    var currentCallback by remember { mutableStateOf<((SecurityDecision) -> Unit)?>(null) }
     var pendingWebPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
     val bridgeCapabilityToken = remember(pwa.id) { UUID.randomUUID().toString() }
+    val securityPolicyStore = remember(pwa.id) { SecurityPolicyStore(pwa) }
+    LaunchedEffect(pwa) { securityPolicyStore.update(pwa) }
 
     val db = remember { AppDatabase.getDatabase(context) }
     val userScriptDao = remember { db.userScriptDao() }
@@ -204,7 +255,7 @@ fun PwaWebViewScreen(
             CookieManager.getInstance().flush()
             pendingWebPermissionRequest?.deny()
             pendingWebPermissionRequest = null
-            currentCallback?.invoke(false)
+            currentCallback?.invoke(SecurityDecision.BLOCK_ONCE)
             currentCallback = null
             webView?.apply {
                 stopLoading()
@@ -260,8 +311,9 @@ fun PwaWebViewScreen(
 
                     // Add Security Sandbox Javascript Interface Bridge
                     addJavascriptInterface(
-                        SecurityBridge(pwa, bridgeCapabilityToken) { urlAndLeakType, callback ->
-                            blockedUrl = urlAndLeakType
+                        SecurityBridge(securityPolicyStore, bridgeCapabilityToken) { host, leakType, callback ->
+                            blockedUrl = host
+                            blockedLeakType = leakType
                             currentCallback = callback
                             showSecurityDialog = true
                         },
@@ -554,46 +606,62 @@ fun PwaWebViewScreen(
 
         // Privacy Security Sandbox Warning Dialog
         if (showSecurityDialog) {
+            fun resolveSecurityDecision(decision: SecurityDecision) {
+                val callback = currentCallback
+                currentCallback = null
+                showSecurityDialog = false
+                when (decision) {
+                    SecurityDecision.TRUST_DOMAIN -> {
+                        securityPolicyStore.trustDomain(blockedUrl)
+                        onUpdatePwa(securityPolicyStore.snapshot())
+                    }
+                    SecurityDecision.BLOCK_ALL -> {
+                        securityPolicyStore.blockAll()
+                        onUpdatePwa(securityPolicyStore.snapshot())
+                    }
+                    SecurityDecision.ALLOW_ONCE,
+                    SecurityDecision.BLOCK_ONCE -> {
+                        securityPolicyStore.remember(blockedUrl, blockedLeakType, decision)
+                    }
+                }
+                callback?.invoke(decision)
+            }
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = {
-                    currentCallback?.invoke(false)
-                    showSecurityDialog = false
+                    resolveSecurityDecision(SecurityDecision.BLOCK_ONCE)
                 },
                 title = { Text("🔒 隐私安全警报") },
                 text = {
-                    Text("NetNest 沙箱检测到网页正在尝试秘密上传您的私密数据：\n\n目标地址：$blockedUrl\n\n该行为可能会泄露您的聊天历史、API密钥或账号凭证。是否拦截该上传行为？")
+                    Text("检测到网页向外部域名上传疑似敏感数据：\n\n目标地址：$blockedUrl\n数据类型：$blockedLeakType\n\n请选择本次或后续请求的处理方式。")
                 },
                 confirmButton = {
-                    androidx.compose.foundation.layout.Row(
+                    androidx.compose.foundation.layout.Column(
                         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         androidx.compose.material3.TextButton(
-                            onClick = {
-                                currentCallback?.invoke(false) // Block!
-                                showSecurityDialog = false
-                            }
+                            onClick = { resolveSecurityDecision(SecurityDecision.BLOCK_ONCE) },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("拦截 (推荐)", color = Color.Red)
+                            Text("拦截本次（10秒内同类请求）", color = Color.Red)
                         }
                         androidx.compose.material3.TextButton(
-                            onClick = {
-                                currentCallback?.invoke(true) // Allow once!
-                                showSecurityDialog = false
-                            }
+                            onClick = { resolveSecurityDecision(SecurityDecision.ALLOW_ONCE) },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("允许一次", color = Color.Gray)
+                            Text("允许本次（10秒内同类请求）", color = Color.Gray)
                         }
                         androidx.compose.material3.TextButton(
-                            onClick = {
-                                val host = blockedUrl.substringBefore(" ").trim()
-                                val newTrusted = if (pwa.trustedDomains.isEmpty()) host else "${pwa.trustedDomains},$host"
-                                onUpdatePwa(pwa.copy(trustedDomains = newTrusted))
-                                currentCallback?.invoke(true) // Allow permanently!
-                                showSecurityDialog = false
-                            }
+                            onClick = { resolveSecurityDecision(SecurityDecision.TRUST_DOMAIN) },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("信任该域名", color = Color(0xFF4CAF50))
+                            Text("信任此域名", color = Color(0xFF4CAF50))
+                        }
+                        androidx.compose.material3.TextButton(
+                            onClick = { resolveSecurityDecision(SecurityDecision.BLOCK_ALL) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("拦截所有疑似泄露", color = MaterialTheme.colorScheme.error)
                         }
                     }
                 },
@@ -971,9 +1039,9 @@ private fun injectSecuritySandbox(webView: WebView, pwa: PwaEntity, capabilityTo
 }
 
 class SecurityBridge(
-    private val pwa: PwaEntity,
+    private val policyStore: SecurityPolicyStore,
     capabilityToken: String,
-    private val onShowBlockDialog: (urlAndLeakType: String, callback: (Boolean) -> Unit) -> Unit
+    private val onShowBlockDialog: (host: String, leakType: String, callback: (SecurityDecision) -> Unit) -> Unit
 ) {
     private val dialogLock = Any()
     private val capabilityTokenBytes = capabilityToken.toByteArray(Charsets.UTF_8)
@@ -981,13 +1049,14 @@ class SecurityBridge(
     @android.webkit.JavascriptInterface
     fun auditRequest(token: String, url: String, method: String, body: String): String {
         if (!isAuthorized(token)) return "BLOCK"
-        if (pwa.securityMode == 0) return "ALLOW"
+        val policy = policyStore.snapshot()
+        if (policy.securityMode == 0) return "ALLOW"
 
         val uri = Uri.parse(url)
         val host = uri.host ?: ""
         if (host.isEmpty()) return "ALLOW"
 
-        if (WebSecurityPolicy.isTrustedUrl(url, pwa.url, pwa.trustedDomains)) {
+        if (WebSecurityPolicy.isTrustedUrl(url, policy.url, policy.trustedDomains)) {
             return "ALLOW"
         }
 
@@ -1015,27 +1084,36 @@ class SecurityBridge(
         }
 
         synchronized(dialogLock) {
-            // Block silently
-            if (pwa.securityMode == 2) {
+            val latestPolicy = policyStore.snapshot()
+            if (latestPolicy.securityMode == 2 || !latestPolicy.securityPromptEnabled) {
                 return "BLOCK"
             }
 
-            // Show dialog and block thread
-            var isAllowed = false
+            policyStore.cached(host, leakType)?.let { cached ->
+                return if (cached == SecurityDecision.ALLOW_ONCE) "ALLOW" else "BLOCK"
+            }
+
+            val decision = AtomicReference(SecurityDecision.BLOCK_ONCE)
             val latch = java.util.concurrent.CountDownLatch(1)
 
-            onShowBlockDialog("$host ($leakType)") { allowed ->
-                isAllowed = allowed
+            onShowBlockDialog(host, leakType) { selected ->
+                decision.set(selected)
                 latch.countDown()
             }
 
             try {
-                latch.await()
+                latch.await(8, TimeUnit.SECONDS)
             } catch (e: InterruptedException) {
-                // Default to block
+                Thread.currentThread().interrupt()
             }
 
-            return if (isAllowed) "ALLOW" else "BLOCK"
+            val selected = decision.get()
+            return when (selected) {
+                SecurityDecision.TRUST_DOMAIN,
+                SecurityDecision.ALLOW_ONCE -> "ALLOW"
+                SecurityDecision.BLOCK_ALL,
+                SecurityDecision.BLOCK_ONCE -> "BLOCK"
+            }
         }
     }
 
