@@ -21,7 +21,8 @@ import java.io.File
 
 class MainViewModel(context: Context) : ViewModel() {
 
-    val database = AppDatabase.getDatabase(context)
+    private val appContext = context.applicationContext
+    val database = AppDatabase.getDatabase(appContext)
     private val pwaDao: PwaDao = database.pwaDao()
     val userScriptDao = database.userScriptDao()
     val scriptStorageDao = database.scriptStorageDao()
@@ -142,6 +143,14 @@ class MainViewModel(context: Context) : ViewModel() {
             }
 
             pwaDao.delete(pwa)
+            runCatching { clearPwaNotificationData(appContext, pwa) }
+                .onFailure {
+                    Log.e(
+                        "MainViewModel",
+                        "Failed to clear notification data for PWA ${pwa.id}",
+                        it
+                    )
+                }
         }
     }
 

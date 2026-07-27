@@ -112,6 +112,8 @@ fun PwaWebViewScreen(
     pwa: PwaEntity,
     onBackToHome: () -> Unit,
     onUpdatePwa: (PwaEntity) -> Unit = {},
+    notificationClickId: String? = null,
+    onNotificationClickConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -123,11 +125,53 @@ fun PwaWebViewScreen(
     var blockedLeakType by remember { mutableStateOf("") }
     var currentCallback by remember { mutableStateOf<((SecurityDecision) -> Unit)?>(null) }
     var pendingWebPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
+    var pendingNotificationPermission by remember {
+        mutableStateOf<PwaNotificationPermissionRequest?>(null)
+    }
+    var pendingSystemNotificationPermission by remember {
+        mutableStateOf<PwaNotificationPermissionRequest?>(null)
+    }
+    var pendingNotificationClickId by remember { mutableStateOf<String?>(null) }
     val downloadQueue = remember(pwa.id) { mutableStateListOf<BrowserDownloadRequest>() }
     var pendingLegacyDownload by remember { mutableStateOf<BrowserDownloadRequest?>(null) }
     val bridgeCapabilityToken = remember(pwa.id) { UUID.randomUUID().toString() }
     val securityPolicyStore = remember(pwa.id) { SecurityPolicyStore(pwa) }
+    val notificationPermissionStore = remember {
+        PwaNotificationPermissionStore(context.applicationContext)
+    }
+    val notificationBridge = remember(pwa.id, pwa.url) {
+        PwaNotificationBridge(
+            context = context.applicationContext,
+            pwa = pwa,
+            capabilityToken = bridgeCapabilityToken,
+            permissionStore = notificationPermissionStore,
+            evaluateJavascript = { script ->
+                webView?.evaluateJavascript(script, null)
+            },
+            onPermissionRequested = { request ->
+                pendingNotificationPermission = request
+            }
+        )
+    }
     LaunchedEffect(pwa) { securityPolicyStore.update(pwa) }
+
+    fun dispatchNotificationClick(targetWebView: WebView) {
+        val notificationId = pendingNotificationClickId ?: return
+        targetWebView.evaluateJavascript(
+            buildPwaNotificationClickScript(notificationId)
+        ) { delivered ->
+            if (delivered == "true" && pendingNotificationClickId == notificationId) {
+                pendingNotificationClickId = null
+                onNotificationClickConsumed()
+            }
+        }
+    }
+
+    LaunchedEffect(notificationClickId, webView) {
+        val notificationId = notificationClickId ?: return@LaunchedEffect
+        pendingNotificationClickId = notificationId
+        webView?.let(::dispatchNotificationClick)
+    }
 
     fun queueDownload(request: BrowserDownloadRequest) {
         val alreadyQueued = downloadQueue.any {
@@ -321,6 +365,33 @@ fun PwaWebViewScreen(
         }
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val request = pendingSystemNotificationPermission
+        pendingSystemNotificationPermission = null
+        if (request != null) {
+            notificationPermissionStore.set(
+                pwa.id,
+                pwa.url,
+                PwaNotificationPermission.GRANTED
+            )
+            val effectivePermission = if (granted) {
+                PwaNotificationPermission.GRANTED
+            } else {
+                PwaNotificationPermission.DENIED
+            }
+            notificationBridge.resolvePermission(request.requestId, effectivePermission)
+            if (!granted) {
+                Toast.makeText(
+                    context,
+                    "系统通知权限未授予，可在应用设置中重新开启",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
     // System Back Button Handling
     BackHandler {
         val wv = webView
@@ -352,6 +423,20 @@ fun PwaWebViewScreen(
             CookieManager.getInstance().flush()
             pendingWebPermissionRequest?.deny()
             pendingWebPermissionRequest = null
+            pendingNotificationPermission?.let {
+                notificationBridge.resolvePermission(
+                    it.requestId,
+                    PwaNotificationPermission.DEFAULT
+                )
+            }
+            pendingSystemNotificationPermission?.let {
+                notificationBridge.resolvePermission(
+                    it.requestId,
+                    PwaNotificationPermission.DEFAULT
+                )
+            }
+            pendingNotificationPermission = null
+            pendingSystemNotificationPermission = null
             currentCallback?.invoke(SecurityDecision.BLOCK_ONCE)
             currentCallback = null
             webDataDownloadBridge.cancelAll()
@@ -362,6 +447,7 @@ fun PwaWebViewScreen(
                 removeJavascriptInterface("NetNestSecurity")
                 removeJavascriptInterface("NetNestScriptBridge")
                 removeJavascriptInterface("NetNestDownload")
+                removeJavascriptInterface("NetNestNotification")
                 webChromeClient = null
                 webViewClient = WebViewClient()
                 loadUrl("about:blank")
@@ -426,6 +512,11 @@ fun PwaWebViewScreen(
                         "NetNestDownload"
                     )
 
+                    addJavascriptInterface(
+                        notificationBridge,
+                        "NetNestNotification"
+                    )
+
                     // Add User Script storage bridge
                     addJavascriptInterface(
                         NetNestScriptBridge(
@@ -449,6 +540,14 @@ fun PwaWebViewScreen(
                                     getWebDataDownloadSupportJs(bridgeCapabilityToken),
                                 setOf("*")
                             )
+                            val notificationOrigins = notificationAllowedOriginRules(pwa.url)
+                            if (notificationOrigins.isNotEmpty()) {
+                                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                                    this,
+                                    getPwaNotificationSupportJs(bridgeCapabilityToken),
+                                    notificationOrigins
+                                )
+                            }
                         } catch (e: Exception) {
                             Log.e("PwaWebViewScreen", "addDocumentStartJavaScript error", e)
                         }
@@ -459,6 +558,18 @@ fun PwaWebViewScreen(
                             super.onPageStarted(view, url, favicon)
                             if (view != null) {
                                 injectSecuritySandbox(view, pwa, bridgeCapabilityToken)
+                                if (
+                                    url != null &&
+                                    !androidx.webkit.WebViewFeature.isFeatureSupported(
+                                        androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT
+                                    ) &&
+                                    isNotificationSourceAllowed(url, pwa.url)
+                                ) {
+                                    view.evaluateJavascript(
+                                        getPwaNotificationSupportJs(bridgeCapabilityToken),
+                                        null
+                                    )
+                                }
                                 if (url != null) {
                                     injectScriptsForPhase(view, url, RunAt.DOCUMENT_START)
                                 }
@@ -478,6 +589,7 @@ fun PwaWebViewScreen(
                                         injectScriptsForPhase(view, url, RunAt.DOCUMENT_IDLE)
                                     }, 500)
                                 }
+                                dispatchNotificationClick(view)
                             }
 
                              // Dynamically update status bar color based on webpage theme color or body background
@@ -804,6 +916,94 @@ fun PwaWebViewScreen(
                 }
             )
         }
+
+        pendingNotificationPermission
+            ?.takeIf { !showSecurityDialog && downloadQueue.isEmpty() }
+            ?.let { request ->
+                fun resolve(permission: PwaNotificationPermission, persist: Boolean) {
+                    if (persist) {
+                        notificationPermissionStore.set(pwa.id, pwa.url, permission)
+                    }
+                    pendingNotificationPermission = null
+                    notificationBridge.resolvePermission(request.requestId, permission)
+                }
+
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = {
+                        resolve(PwaNotificationPermission.DEFAULT, persist = false)
+                    },
+                    title = { Text("允许网页通知？") },
+                    text = {
+                        androidx.compose.foundation.layout.Column(
+                            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("${pwa.name} 请求发送系统通知。")
+                            Text(
+                                request.origin,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "允许后，该网页可在 NetNest 运行期间发送通知；系统会限制频率。",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                val runtimeGranted =
+                                    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                                        ContextCompat.checkSelfPermission(
+                                            context,
+                                            Manifest.permission.POST_NOTIFICATIONS
+                                        ) == PackageManager.PERMISSION_GRANTED
+                                if (runtimeGranted) {
+                                    notificationPermissionStore.set(
+                                        pwa.id,
+                                        pwa.url,
+                                        PwaNotificationPermission.GRANTED
+                                    )
+                                    val effective = effectiveNotificationPermission(
+                                        context,
+                                        PwaNotificationPermission.GRANTED,
+                                        pwa.id
+                                    )
+                                    pendingNotificationPermission = null
+                                    notificationBridge.resolvePermission(
+                                        request.requestId,
+                                        effective
+                                    )
+                                    if (effective == PwaNotificationPermission.DENIED) {
+                                        Toast.makeText(
+                                            context,
+                                            "系统通知已关闭，请在应用设置中开启",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                } else {
+                                    pendingNotificationPermission = null
+                                    pendingSystemNotificationPermission = request
+                                    notificationPermissionLauncher.launch(
+                                        Manifest.permission.POST_NOTIFICATIONS
+                                    )
+                                }
+                            }
+                        ) {
+                            Text("允许")
+                        }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                resolve(PwaNotificationPermission.DENIED, persist = true)
+                            }
+                        ) {
+                            Text("阻止")
+                        }
+                    }
+                )
+            }
 
         // Privacy Security Sandbox Warning Dialog
         if (showSecurityDialog) {

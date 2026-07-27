@@ -7,8 +7,10 @@ NetNest is a premium Android aggregator shell app that acts as a unified portal 
 - 📱 **Desktop Grid Portal**: A clean, Material 3 grid layout showing all added web apps with high-resolution icons.
 - ⚡ **Auto PWA Manifest Extraction**: Automatically fetches URLs, parses `<link rel="manifest">` tags, and retrieves names, icons (selecting the largest available), and theme colors.
 - 🔄 **Robust Fallbacks**: Falls back to `apple-touch-icon`, standard favicon arrays, or `/favicon.ico` at the domain root if no manifest is present.
-- 🔒 **Sandbox-Isolated Webviews**: Prevents cookies and local storage bleeding between different websites through the same-origin policy.
+- 🔒 **Privacy-Aware WebViews**: Blocks third-party cookies and cross-origin storage access. Entries on the same domain still share Android WebView cookie state.
 - ⚙️ **Advanced WebView Settings**: Full JavaScript support, DOM Storage, HTML5 Database, file chooser uploads, and custom web clients.
+- 📥 **Confirmed Browser Downloads**: Supports regular and page-generated downloads after an explicit confirmation, saving them under `Download/NetNest`.
+- 🔔 **Per-PWA Notifications**: Bridges foreground Web Notifications to Android channels with independent permission and rate limiting. Generic Web Push after NetNest is fully closed is not supported.
 - 🔄 **Reordering and Context Actions**: Drag-and-swap ordering options, editing, deleting (with local cache cleanup), and manual icon refreshing.
 - 🎨 **Fallback Typography Icons**: Dynamic letter-based fallback icons styled with site colors when an icon cannot be retrieved.
 

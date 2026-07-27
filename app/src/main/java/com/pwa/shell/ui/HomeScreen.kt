@@ -617,6 +617,13 @@ fun EditPwaDialog(
     onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, securityPromptEnabled: Boolean, trustedDomains: String, customUserAgent: String?, customLanguage: String, customPlatform: String, screenWidth: Int, screenHeight: Int, deviceScaleFactor: Float) -> Unit,
     onManageScripts: () -> Unit
 ) {
+    val context = LocalContext.current
+    val notificationPermissionStore = remember {
+        PwaNotificationPermissionStore(context.applicationContext)
+    }
+    var notificationPermission by remember(pwa.id, pwa.url) {
+        mutableStateOf(notificationPermissionStore.get(pwa.id, pwa.url))
+    }
     var name by remember { mutableStateOf(pwa.name) }
     var url by remember { mutableStateOf(pwa.url) }
     var themeColor by remember { mutableStateOf(pwa.themeColor ?: "") }
@@ -841,7 +848,7 @@ fun EditPwaDialog(
                         item {
                         EditorSection(
                             title = "隐私与安全",
-                            description = "控制疑似敏感数据上传"
+                            description = "控制敏感数据上传与网页通知权限"
                         ) {
                             EditorSwitchRow(
                                 title = "隐私数据上传拦截",
@@ -865,6 +872,44 @@ fun EditPwaDialog(
                                     supportingText = { Text("多个域名使用英文逗号分隔") },
                                     modifier = Modifier.fillMaxWidth()
                                 )
+                            }
+                            HorizontalDivider()
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("网页通知", style = MaterialTheme.typography.bodyMedium)
+                                val effectivePermission = effectiveNotificationPermission(
+                                    context,
+                                    notificationPermission,
+                                    pwa.id
+                                )
+                                val permissionLabel = when {
+                                    notificationPermission == PwaNotificationPermission.GRANTED &&
+                                        effectivePermission == PwaNotificationPermission.DENIED ->
+                                        "网页已允许，但系统通知已关闭"
+                                    notificationPermission == PwaNotificationPermission.GRANTED ->
+                                        "已允许"
+                                    notificationPermission == PwaNotificationPermission.DENIED ->
+                                        "已阻止"
+                                    else -> "尚未请求"
+                                }
+                                Text(
+                                    "$permissionLabel。权限按此 PWA 独立保存。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (notificationPermission != PwaNotificationPermission.DEFAULT) {
+                                    TextButton(
+                                        onClick = {
+                                            resetPwaNotificationPermission(context, pwa)
+                                            notificationPermission =
+                                                PwaNotificationPermission.DEFAULT
+                                        }
+                                    ) {
+                                        Text("重置通知授权")
+                                    }
+                                }
                             }
                         }
                         }

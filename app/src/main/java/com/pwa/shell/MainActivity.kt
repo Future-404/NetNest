@@ -1,5 +1,6 @@
 package com.pwa.shell
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,10 +19,17 @@ import com.pwa.shell.ui.HomeScreen
 import com.pwa.shell.ui.MainViewModel
 import com.pwa.shell.ui.PwaWebViewScreen
 import com.pwa.shell.ui.theme.NetNestTheme
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 
 class MainActivity : ComponentActivity() {
+    private val notificationPwaTargets = MutableStateFlow<NotificationLaunch?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        notificationPwaTargets.value = notificationLaunch(intent)
+        consumeNotificationIntent()
         
         // Enable edge-to-edge immersion globally
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -36,6 +44,20 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
+
+                    LaunchedEffect(viewModel) {
+                        notificationPwaTargets.filterNotNull().collect { target ->
+                            val pwa = viewModel.pwaList.first()
+                                .firstOrNull { it.id == target.pwaId }
+                            if (pwa != null) {
+                                currentScreen = Screen.WebView(
+                                    pwa = pwa,
+                                    notificationId = target.notificationId
+                                )
+                            }
+                            notificationPwaTargets.value = null
+                        }
+                    }
 
                     when (val screen = currentScreen) {
                         is Screen.Home -> {
@@ -55,25 +77,74 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         is Screen.WebView -> {
-                            PwaWebViewScreen(
-                                pwa = screen.pwa,
-                                onBackToHome = {
-                                    currentScreen = Screen.Home
-                                },
-                                onUpdatePwa = { updatedPwa ->
-                                    viewModel.updatePwa(updatedPwa)
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            key(screen.pwa.id) {
+                                PwaWebViewScreen(
+                                    pwa = screen.pwa,
+                                    notificationClickId = screen.notificationId,
+                                    onNotificationClickConsumed = {
+                                        currentScreen = screen.copy(notificationId = null)
+                                    },
+                                    onBackToHome = {
+                                        currentScreen = Screen.Home
+                                    },
+                                    onUpdatePwa = { updatedPwa ->
+                                        viewModel.updatePwa(updatedPwa)
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        notificationPwaTargets.value = notificationLaunch(intent)
+        consumeNotificationIntent()
+    }
+
+    private fun notificationLaunch(intent: Intent?): NotificationLaunch? {
+        if (intent?.action != ACTION_OPEN_PWA_NOTIFICATION) return null
+        val pwaId = intent.getLongExtra(EXTRA_PWA_ID, -1L).takeIf { it > 0L }
+            ?: return null
+        return NotificationLaunch(
+            pwaId = pwaId,
+            notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID)
+        )
+    }
+
+    private fun consumeNotificationIntent() {
+        val consumedIntent = intent ?: return
+        if (consumedIntent.action != ACTION_OPEN_PWA_NOTIFICATION) return
+        setIntent(Intent(consumedIntent).apply {
+            action = Intent.ACTION_MAIN
+            data = null
+            removeExtra(EXTRA_PWA_ID)
+            removeExtra(EXTRA_NOTIFICATION_ID)
+        })
+    }
+
+    companion object {
+        const val ACTION_OPEN_PWA_NOTIFICATION =
+            "com.pwa.shell.action.OPEN_PWA_NOTIFICATION"
+        const val EXTRA_PWA_ID = "pwa_id"
+        const val EXTRA_NOTIFICATION_ID = "notification_id"
+    }
 }
+
+private data class NotificationLaunch(
+    val pwaId: Long,
+    val notificationId: String?
+)
 
 sealed interface Screen {
     object Home : Screen
-    data class WebView(val pwa: PwaEntity) : Screen
+    data class WebView(
+        val pwa: PwaEntity,
+        val notificationId: String? = null
+    ) : Screen
 }
