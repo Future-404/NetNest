@@ -54,6 +54,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.fillMaxWidth
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -636,7 +637,7 @@ fun PwaWebViewScreen(
                 },
                 confirmButton = {
                     androidx.compose.foundation.layout.Column(
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         androidx.compose.material3.TextButton(
