@@ -96,23 +96,32 @@ class MainViewModel(context: Context) : ViewModel() {
                 }
             }
             
-            // Clear WebView WebStorage and Cookies for the PWA domain to prevent data residues
+            // WebView cookies/storage are process-global. Only clear them when no other
+            // configured PWA could be using the same host or a parent/child subdomain.
             try {
                 val uri = Uri.parse(pwa.url)
                 val scheme = uri.scheme ?: "https"
                 val host = uri.host ?: ""
                 if (host.isNotEmpty()) {
+                    val hasRelatedPwa = pwaDao.getAllPwasOnce()
+                        .filter { it.id != pwa.id }
+                        .any { hostsShareCookieScope(host, Uri.parse(it.url).host.orEmpty()) }
+                    if (hasRelatedPwa) {
+                        Log.i("MainViewModel", "Skipping WebView cleanup for ${pwa.url}; another PWA shares cookie scope")
+                    } else {
                     val port = uri.port
                     val origin = if (port != -1) {
                         "$scheme://$host:$port"
                     } else {
                         "$scheme://$host"
                     }
-                    
-                    // 1. Delete WebStorage (LocalStorage, IndexedDB, WebSQL, AppCache) for this origin
+
+                    // Delete storage for the configured origin. We intentionally avoid global
+                    // removeAllCookies()/deleteAllData() because they would affect unrelated PWAs.
                     WebStorage.getInstance().deleteOrigin(origin)
-                    
-                    // 2. Clear Cookies for this URL/Domain
+
+                    // Expire cookies visible to this exact URL. WebView does not expose cookie
+                    // paths/domains, so unknown redirect/third-party cookies are left intact.
                     val cookieManager = CookieManager.getInstance()
                     val cookieString = cookieManager.getCookie(pwa.url)
                     if (!cookieString.isNullOrEmpty()) {
@@ -126,6 +135,7 @@ class MainViewModel(context: Context) : ViewModel() {
                         }
                         cookieManager.flush()
                     }
+                    }
                 }
             } catch (e: java.lang.Exception) {
                 Log.e("MainViewModel", "Failed to clean WebView cache for ${pwa.url}", e)
@@ -133,6 +143,13 @@ class MainViewModel(context: Context) : ViewModel() {
 
             pwaDao.delete(pwa)
         }
+    }
+
+    private fun hostsShareCookieScope(first: String, second: String): Boolean {
+        val a = first.trim('.').lowercase()
+        val b = second.trim('.').lowercase()
+        if (a.isEmpty() || b.isEmpty()) return false
+        return a == b || a.endsWith(".$b") || b.endsWith(".$a")
     }
 
 

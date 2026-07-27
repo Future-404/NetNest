@@ -14,6 +14,9 @@ interface PwaDao {
     @Query("SELECT * FROM pwas ORDER BY displayOrder ASC, addedTime DESC")
     fun getAllPwas(): Flow<List<PwaEntity>>
 
+    @Query("SELECT * FROM pwas ORDER BY displayOrder ASC, addedTime DESC")
+    suspend fun getAllPwasOnce(): List<PwaEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(pwa: PwaEntity): Long
 
