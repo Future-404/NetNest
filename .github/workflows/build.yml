@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   build:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -38,7 +39,6 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -47,11 +47,52 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Download Debug APK
+      - name: Find successful main build
+        id: main-build
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh run download "$GITHUB_RUN_ID" --name NetNest-Debug-APK --dir release-apk
+        run: |
+          deadline=$((SECONDS + 900))
+
+          while (( SECONDS < deadline )); do
+            run_details="$(
+              gh run list \
+                --workflow build.yml \
+                --branch main \
+                --commit "$GITHUB_SHA" \
+                --event push \
+                --limit 1 \
+                --json databaseId,status,conclusion \
+                --jq '.[] | [.databaseId, .status, (.conclusion // "")] | @tsv'
+            )"
+
+            if [ -n "$run_details" ]; then
+              IFS=$'\t' read -r run_id run_status run_conclusion <<< "$run_details"
+
+              if [ "$run_status" = "completed" ]; then
+                if [ "$run_conclusion" != "success" ]; then
+                  echo "::error::Main build $run_id finished with $run_conclusion"
+                  exit 1
+                fi
+
+                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+
+            sleep 10
+          done
+
+          echo "::error::Timed out waiting for a successful main build of $GITHUB_SHA"
+          exit 1
+
+      - name: Download APK from main build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MAIN_RUN_ID: ${{ steps.main-build.outputs.run_id }}
+        run: gh run download "$MAIN_RUN_ID" --name NetNest-Debug-APK --dir release-apk
 
       - name: Verify version and prepare APK
         run: |
