@@ -33,6 +33,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -42,6 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
@@ -460,7 +462,9 @@ fun PwaGridItem(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val softColor = remember(pwa.url) { getSoftColor(pwa.url) }
+    val iconShape = RoundedCornerShape(20.dp)
     val hapticFeedback = LocalHapticFeedback.current
+    val dragTouchSlop = LocalViewConfiguration.current.touchSlop
     val latestOnDragStart by rememberUpdatedState(onDragStart)
     val latestOnDrag by rememberUpdatedState(onDrag)
     val latestOnDragEnd by rememberUpdatedState(onDragEnd)
@@ -475,27 +479,30 @@ fun PwaGridItem(
                 translationY = dragTranslation.y
                 scaleX = if (isDragging) 1.08f else 1f
                 scaleY = if (isDragging) 1.08f else 1f
-                shadowElevation = if (isDragging) 16.dp.toPx() else 0f
             }
-            .pointerInput(pwa.id) {
-                var moved = false
+            .pointerInput(pwa.id, dragTouchSlop) {
+                val dragGate = LongPressDragGate(dragTouchSlop)
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
-                        moved = false
+                        dragGate.reset()
                         expanded = false
                         hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                         latestOnDragStart()
                     },
                     onDrag = { change, amount ->
                         change.consume()
-                        moved = true
-                        latestOnDrag(amount)
+                        dragGate.track(amount)?.let { approvedDelta ->
+                            latestOnDrag(approvedDelta)
+                        }
                     },
                     onDragEnd = {
-                        latestOnDragEnd(moved)
-                        if (!moved) expanded = true
+                        latestOnDragEnd(dragGate.isDragging)
+                        if (!dragGate.isDragging) expanded = true
                     },
-                    onDragCancel = { latestOnDragCancel() }
+                    onDragCancel = {
+                        dragGate.reset()
+                        latestOnDragCancel()
+                    }
                 )
             }
             .semantics {
@@ -513,7 +520,12 @@ fun PwaGridItem(
         Box(
             modifier = Modifier
                 .size(64.dp)
-                .clip(RoundedCornerShape(20.dp)) // iOS Squircle style
+                .shadow(
+                    elevation = if (isDragging) 12.dp else 0.dp,
+                    shape = iconShape,
+                    clip = false
+                )
+                .clip(iconShape)
                 .background(softColor),
             contentAlignment = Alignment.Center
         ) {
@@ -1147,7 +1159,7 @@ fun EditPwaDialog(
                                 }
                             }
                             Text(
-                                text = "图片将安全复制到 NetNest，仅用于该 PWA 和桌面快捷方式。",
+                                text = "图片会按比例居中裁剪为 512×512 图标，并安全保存到 NetNest。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

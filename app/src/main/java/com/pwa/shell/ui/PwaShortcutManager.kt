@@ -2,6 +2,8 @@ package com.pwa.shell.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.os.Build
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -19,6 +21,9 @@ internal fun pwaShortcutId(pwaId: Long): String = "pwa_$pwaId"
 
 internal fun pwaShortcutShortLabel(name: String): String =
     name.trim().ifEmpty { "PWA" }.take(10)
+
+internal fun supportsAdaptiveShortcutIcon(sdkInt: Int): Boolean =
+    sdkInt >= Build.VERSION_CODES.O
 
 internal suspend fun requestPinnedPwaShortcut(
     context: Context,
@@ -65,7 +70,7 @@ private suspend fun buildPwaShortcut(
     context: Context,
     pwa: PwaEntity
 ): ShortcutInfoCompat {
-    val icon = PwaIconManager.shortcutBitmap(context, pwa.iconPath, pwa.name)
+    val iconBitmap = PwaIconManager.shortcutBitmap(context, pwa.iconPath, pwa.name)
     val intent = Intent(context, MainActivity::class.java).apply {
         action = MainActivity.ACTION_OPEN_PWA_SHORTCUT
         putExtra(MainActivity.EXTRA_PWA_ID, pwa.id)
@@ -74,7 +79,14 @@ private suspend fun buildPwaShortcut(
     return ShortcutInfoCompat.Builder(context, pwaShortcutId(pwa.id))
         .setShortLabel(pwaShortcutShortLabel(pwa.name))
         .setLongLabel(pwa.name.trim().ifEmpty { "PWA" }.take(25))
-        .setIcon(IconCompat.createWithBitmap(icon))
+        .setIcon(createPwaShortcutIcon(iconBitmap))
         .setIntent(intent)
         .build()
 }
+
+private fun createPwaShortcutIcon(bitmap: Bitmap): IconCompat =
+    if (supportsAdaptiveShortcutIcon(Build.VERSION.SDK_INT)) {
+        IconCompat.createWithAdaptiveBitmap(bitmap)
+    } else {
+        IconCompat.createWithBitmap(bitmap)
+    }

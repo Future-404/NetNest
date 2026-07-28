@@ -14,6 +14,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.UUID
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -31,7 +32,12 @@ internal object PwaIconManager {
                 val temporary = File.createTempFile("pwa_icon_", ".tmp", context.cacheDir)
                 try {
                     copyUriWithLimit(context, uri, temporary)
-                    val bitmap = decodeSquareBitmap(context, temporary, STORED_ICON_SIZE)
+                    val bitmap = decodeSquareBitmap(
+                        context = context,
+                        file = temporary,
+                        size = STORED_ICON_SIZE,
+                        cropToFill = true
+                    )
                         ?: throw IOException("无法识别该图片，请选择 PNG、JPG、WebP 或 SVG 文件")
                     try {
                         saveBitmap(context, bitmap, "custom_${UUID.randomUUID()}.png")
@@ -88,7 +94,8 @@ internal object PwaIconManager {
     private suspend fun decodeSquareBitmap(
         context: Context,
         file: File,
-        size: Int
+        size: Int,
+        cropToFill: Boolean = false
     ): Bitmap? {
         val imageLoader = ImageLoader.Builder(context)
             .components { add(SvgDecoder.Factory()) }
@@ -101,13 +108,13 @@ internal object PwaIconManager {
         val drawable = (imageLoader.execute(request) as? SuccessResult)?.drawable ?: return null
         val sourceWidth = drawable.intrinsicWidth.takeIf { it > 0 } ?: size
         val sourceHeight = drawable.intrinsicHeight.takeIf { it > 0 } ?: size
-        val scale = min(size.toFloat() / sourceWidth, size.toFloat() / sourceHeight)
-        val width = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
-        val height = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
-        val left = (size - width) / 2
-        val top = (size - height) / 2
+        val bounds = if (cropToFill) {
+            calculateCenterCropBounds(sourceWidth, sourceHeight, size)
+        } else {
+            calculateCenterFitBounds(sourceWidth, sourceHeight, size)
+        }
         return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bitmap ->
-            drawable.setBounds(left, top, left + width, top + height)
+            drawable.setBounds(bounds.left, bounds.top, bounds.right, bounds.bottom)
             drawable.draw(Canvas(bitmap))
         }
     }
@@ -147,6 +154,40 @@ internal object PwaIconManager {
         File(context.filesDir, ICON_DIRECTORY).apply {
             if (!exists() && !mkdirs()) throw IOException("无法创建图标目录")
         }
+}
+
+internal data class IconDrawBounds(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int
+)
+
+internal fun calculateCenterCropBounds(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    targetSize: Int
+): IconDrawBounds {
+    require(sourceWidth > 0 && sourceHeight > 0 && targetSize > 0)
+    val scale = max(targetSize.toFloat() / sourceWidth, targetSize.toFloat() / sourceHeight)
+    val width = (sourceWidth * scale).roundToInt().coerceAtLeast(targetSize)
+    val height = (sourceHeight * scale).roundToInt().coerceAtLeast(targetSize)
+    val left = (targetSize - width) / 2
+    val top = (targetSize - height) / 2
+    return IconDrawBounds(left, top, left + width, top + height)
+}
+
+private fun calculateCenterFitBounds(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    targetSize: Int
+): IconDrawBounds {
+    val scale = min(targetSize.toFloat() / sourceWidth, targetSize.toFloat() / sourceHeight)
+    val width = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
+    val height = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
+    val left = (targetSize - width) / 2
+    val top = (targetSize - height) / 2
+    return IconDrawBounds(left, top, left + width, top + height)
 }
 
 internal fun isDirectChildPath(directory: File, target: File): Boolean =
