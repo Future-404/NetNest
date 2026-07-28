@@ -1,25 +1,36 @@
 package com.pwa.shell
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import com.pwa.shell.data.remote.AppUpdateChecker
+import com.pwa.shell.data.remote.AppUpdateInfo
 import com.pwa.shell.data.local.PwaEntity
 import com.pwa.shell.ui.HomeScreen
 import com.pwa.shell.ui.MainViewModel
 import com.pwa.shell.ui.PwaWebViewScreen
+import com.pwa.shell.ui.getAppVersionName
 import com.pwa.shell.ui.pwaShortcutId
 import com.pwa.shell.ui.theme.NetNestTheme
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +58,15 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
+                    var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+                    val updateChecker = remember { AppUpdateChecker(applicationContext) }
+                    val currentAppVersion = remember {
+                        getAppVersionName(applicationContext)
+                    }
+
+                    LaunchedEffect(updateChecker) {
+                        availableUpdate = updateChecker.check(currentAppVersion)
+                    }
 
                     LaunchedEffect(viewModel) {
                         pwaLaunchTargets.filterNotNull().collect { target ->
@@ -113,6 +133,46 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+
+                    if (currentScreen is Screen.Home) {
+                        availableUpdate?.let { update ->
+                            AppUpdateDialog(
+                                update = update,
+                                currentVersion = currentAppVersion,
+                                onDismiss = {
+                                    updateChecker.snooze(update.versionName)
+                                    availableUpdate = null
+                                },
+                                onDownload = {
+                                    updateChecker.snooze(update.versionName)
+                                    val opened = runCatching {
+                                        startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(update.downloadUrl))
+                                        )
+                                    }.isSuccess
+                                    val fallbackOpened = opened || (
+                                        update.downloadUrl != update.releasePageUrl &&
+                                            runCatching {
+                                                startActivity(
+                                                    Intent(
+                                                        Intent.ACTION_VIEW,
+                                                        Uri.parse(update.releasePageUrl)
+                                                    )
+                                                )
+                                            }.isSuccess
+                                        )
+                                    if (!fallbackOpened) {
+                                        Toast.makeText(
+                                            applicationContext,
+                                            "无法打开更新链接",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                    availableUpdate = null
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -161,6 +221,51 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_PWA_ID = "pwa_id"
         const val EXTRA_NOTIFICATION_ID = "notification_id"
     }
+}
+
+@Composable
+private fun AppUpdateDialog(
+    update: AppUpdateInfo,
+    currentVersion: String,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("发现新版本 ${update.versionName}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("当前版本：$currentVersion")
+                if (update.releaseNotes.isNotBlank()) {
+                    Text(
+                        text = update.releaseNotes,
+                        maxLines = 8,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                Text(
+                    text = if (update.hasDirectApk) {
+                        "将使用系统浏览器下载 APK，安装时由 Android 再次确认。"
+                    } else {
+                        "该发行版没有直接 APK，将打开 GitHub 发行页面。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDownload) {
+                Text(if (update.hasDirectApk) "下载更新" else "查看发行版")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("稍后提醒")
+            }
+        }
+    )
 }
 
 private data class PwaLaunch(

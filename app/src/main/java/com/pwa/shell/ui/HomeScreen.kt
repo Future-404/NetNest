@@ -6,7 +6,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -14,22 +16,35 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -38,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
@@ -49,7 +65,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
@@ -60,6 +76,50 @@ fun HomeScreen(
     val pwas by viewModel.pwaList.collectAsState(initial = emptyList())
     val uiState by viewModel.uiState.collectAsState()
     val homeScope = rememberCoroutineScope()
+    val gridState = rememberLazyGridState()
+    var displayedPwas by remember { mutableStateOf<List<PwaEntity>>(emptyList()) }
+    var dragStartOrder by remember { mutableStateOf<List<PwaEntity>>(emptyList()) }
+    var draggedPwaId by remember { mutableStateOf<Long?>(null) }
+    var draggedCenter by remember { mutableStateOf(Offset.Zero) }
+    var dragInMotion by remember { mutableStateOf(false) }
+    val autoScrollEdge = with(LocalDensity.current) { 72.dp.toPx() }
+
+    LaunchedEffect(pwas) {
+        if (draggedPwaId == null) displayedPwas = pwas
+    }
+
+    fun moveDraggedPwaTo(position: Offset) {
+        val draggedIndex = displayedPwas.indexOfFirst { it.id == draggedPwaId }
+        val targetIndex = gridState.layoutInfo.visibleItemsInfo
+            .firstOrNull { item ->
+                item.index < displayedPwas.size &&
+                    position.x >= item.offset.x &&
+                    position.x <= item.offset.x + item.size.width &&
+                    position.y >= item.offset.y &&
+                    position.y <= item.offset.y + item.size.height
+            }
+            ?.index
+        if (draggedIndex >= 0 && targetIndex != null && draggedIndex != targetIndex) {
+            displayedPwas = moveListItem(displayedPwas, draggedIndex, targetIndex)
+        }
+    }
+
+    LaunchedEffect(draggedPwaId) {
+        while (draggedPwaId != null) {
+            val layoutInfo = gridState.layoutInfo
+            val scrollAmount = when {
+                !dragInMotion -> 0f
+                draggedCenter.y < layoutInfo.viewportStartOffset + autoScrollEdge -> -14f
+                draggedCenter.y > layoutInfo.viewportEndOffset - autoScrollEdge -> 14f
+                else -> 0f
+            }
+            if (scrollAmount != 0f) {
+                gridState.scrollBy(scrollAmount)
+                moveDraggedPwaTo(draggedCenter)
+            }
+            withFrameNanos { }
+        }
+    }
 
     var showAddDialog by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf<PwaEntity?>(null) }
@@ -124,18 +184,36 @@ fun HomeScreen(
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(4), // 4 columns per row
+                    state = gridState,
                     modifier = Modifier
                         .fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
-                    itemsIndexed(pwas, key = { _, pwa -> pwa.id }) { index, pwa ->
+                    itemsIndexed(displayedPwas, key = { _, pwa -> pwa.id }) { index, pwa ->
+                        val itemInfo = gridState.layoutInfo.visibleItemsInfo
+                            .firstOrNull { it.key == pwa.id }
+                        val dragTranslation = if (draggedPwaId == pwa.id && itemInfo != null) {
+                            draggedCenter - Offset(
+                                itemInfo.offset.x + itemInfo.size.width / 2f,
+                                itemInfo.offset.y + itemInfo.size.height / 2f
+                            )
+                        } else {
+                            Offset.Zero
+                        }
                         PwaGridItem(
                             pwa = pwa,
                             index = index,
-                            totalItems = pwas.size,
+                            totalItems = displayedPwas.size,
                             imageLoader = imageLoader,
+                            modifier = if (draggedPwaId == pwa.id) {
+                                Modifier
+                            } else {
+                                Modifier.animateItemPlacement()
+                            },
+                            isDragging = draggedPwaId == pwa.id,
+                            dragTranslation = dragTranslation,
                             onClick = { onPwaClick(pwa) },
                             onDelete = { showDeleteConfirmDialog = pwa },
                             onEdit = { showEditDialog = pwa },
@@ -157,14 +235,46 @@ fun HomeScreen(
                                 }
                             },
                             onMove = { direction ->
-                                val mutablePwas = pwas.toMutableList()
                                 val targetIndex = index + direction
-                                if (targetIndex in mutablePwas.indices) {
-                                    val temp = mutablePwas[index]
-                                    mutablePwas[index] = mutablePwas[targetIndex]
-                                    mutablePwas[targetIndex] = temp
-                                    viewModel.reorderPwas(mutablePwas)
+                                if (targetIndex in displayedPwas.indices) {
+                                    val reordered = moveListItem(displayedPwas, index, targetIndex)
+                                    displayedPwas = reordered
+                                    viewModel.reorderPwas(reordered)
                                 }
+                            },
+                            onDragStart = {
+                                val info = gridState.layoutInfo.visibleItemsInfo
+                                    .firstOrNull { it.key == pwa.id }
+                                if (info != null) {
+                                    dragStartOrder = displayedPwas
+                                    draggedPwaId = pwa.id
+                                    dragInMotion = false
+                                    draggedCenter = Offset(
+                                        info.offset.x + info.size.width / 2f,
+                                        info.offset.y + info.size.height / 2f
+                                    )
+                                }
+                            },
+                            onDrag = { delta ->
+                                dragInMotion = true
+                                draggedCenter += delta
+                                moveDraggedPwaTo(draggedCenter)
+                            },
+                            onDragEnd = { moved ->
+                                if (
+                                    moved &&
+                                    displayedPwas.map(PwaEntity::id) !=
+                                    dragStartOrder.map(PwaEntity::id)
+                                ) {
+                                    viewModel.reorderPwas(displayedPwas)
+                                }
+                                dragInMotion = false
+                                draggedPwaId = null
+                            },
+                            onDragCancel = {
+                                displayedPwas = dragStartOrder
+                                dragInMotion = false
+                                draggedPwaId = null
                             }
                         )
                     }
@@ -335,22 +445,66 @@ fun PwaGridItem(
     index: Int,
     totalItems: Int,
     imageLoader: ImageLoader,
+    modifier: Modifier = Modifier,
+    isDragging: Boolean,
+    dragTranslation: Offset,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
     onAddToHomeScreen: () -> Unit,
-    onMove: (Int) -> Unit
+    onMove: (Int) -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: (Boolean) -> Unit,
+    onDragCancel: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val softColor = remember(pwa.url) { getSoftColor(pwa.url) }
+    val hapticFeedback = LocalHapticFeedback.current
+    val latestOnDragStart by rememberUpdatedState(onDragStart)
+    val latestOnDrag by rememberUpdatedState(onDrag)
+    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
+    val latestOnDragCancel by rememberUpdatedState(onDragCancel)
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = { expanded = true }
-            )
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                translationX = dragTranslation.x
+                translationY = dragTranslation.y
+                scaleX = if (isDragging) 1.08f else 1f
+                scaleY = if (isDragging) 1.08f else 1f
+                shadowElevation = if (isDragging) 16.dp.toPx() else 0f
+            }
+            .pointerInput(pwa.id) {
+                var moved = false
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        moved = false
+                        expanded = false
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        latestOnDragStart()
+                    },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        moved = true
+                        latestOnDrag(amount)
+                    },
+                    onDragEnd = {
+                        latestOnDragEnd(moved)
+                        if (!moved) expanded = true
+                    },
+                    onDragCancel = { latestOnDragCancel() }
+                )
+            }
+            .semantics {
+                onLongClick(label = "打开应用操作") {
+                    expanded = true
+                    true
+                }
+            }
+            .clickable(enabled = !isDragging, onClick = onClick)
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -404,10 +558,24 @@ fun PwaGridItem(
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                offset = DpOffset(x = (-30).dp, y = (-20).dp)
+                offset = DpOffset(x = (-30).dp, y = (-20).dp),
+                modifier = Modifier
+                    .width(232.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
             ) {
+                Text(
+                    text = pwa.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                )
                 DropdownMenuItem(
-                    text = { Text("编辑") },
+                    text = { Text("编辑应用") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
                     onClick = {
                         expanded = false
                         onEdit()
@@ -415,6 +583,8 @@ fun PwaGridItem(
                 )
                 DropdownMenuItem(
                     text = { Text("添加到桌面") },
+                    leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
+                    modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
                     onClick = {
                         expanded = false
                         onAddToHomeScreen()
@@ -423,7 +593,9 @@ fun PwaGridItem(
 
                 if (index > 0) {
                     DropdownMenuItem(
-                        text = { Text("左移") },
+                        text = { Text("向左移动") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null) },
+                        modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
                         onClick = {
                             expanded = false
                             onMove(-1)
@@ -432,16 +604,30 @@ fun PwaGridItem(
                 }
                 if (index < totalItems - 1) {
                     DropdownMenuItem(
-                        text = { Text("右移") },
+                        text = { Text("向右移动") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
+                        modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
                         onClick = {
                             expanded = false
                             onMove(1)
                         }
                     )
                 }
-                HorizontalDivider()
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                )
                 DropdownMenuItem(
-                    text = { Text("删除", color = Color.Red) },
+                    text = { Text("删除应用") },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                    colors = MenuDefaults.itemColors(
+                        textColor = MaterialTheme.colorScheme.error,
+                        leadingIconColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)),
                     onClick = {
                         expanded = false
                         onDelete()
@@ -663,7 +849,7 @@ fun EditPwaDialog(
     var iconPath by remember { mutableStateOf(pwa.iconPath) }
     var iconLoading by remember { mutableStateOf(false) }
     var iconError by remember { mutableStateOf<String?>(null) }
-    var iconCommitted by remember { mutableStateOf(false) }
+    val iconDraft = remember(pwa.id) { PwaIconDraft(pwa.iconPath) }
     var themeColor by remember { mutableStateOf(pwa.themeColor ?: "") }
     var useChromeUa by remember { mutableStateOf(pwa.useChromeUa) }
     var useDevConsole by remember { mutableStateOf(pwa.useDevConsole) }
@@ -702,6 +888,7 @@ fun EditPwaDialog(
             PwaIconManager.deleteManagedIcon(context, iconPath)
         }
         iconPath = updatedPath
+        iconDraft.replace(updatedPath)
     }
     val iconPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -721,13 +908,10 @@ fun EditPwaDialog(
             }
         }
     }
-    val latestIconPath by rememberUpdatedState(iconPath)
-    val latestIconCommitted by rememberUpdatedState(iconCommitted)
     DisposableEffect(pwa.id) {
         onDispose {
-            if (!latestIconCommitted && latestIconPath != pwa.iconPath) {
-                PwaIconManager.deleteManagedIcon(context, latestIconPath)
-            }
+            iconDraft.pathToDeleteOnDispose()
+                ?.let { PwaIconManager.deleteManagedIcon(context, it) }
         }
     }
 
@@ -772,7 +956,7 @@ fun EditPwaDialog(
             editorScope.launch { editorListState.animateScrollToItem(0) }
             return
         }
-        iconCommitted = true
+        iconDraft.commit()
         onConfirm(
             name.trim(),
             url.trim(),
@@ -1380,14 +1564,5 @@ private fun parseHexColor(hex: String?): Color {
         }
     } catch (e: Exception) {
         Color(0xFF6200EE)
-    }
-}
-
-private fun getAppVersionName(context: Context): String {
-    return try {
-        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-        packageInfo.versionName ?: "1.0.0"
-    } catch (e: Exception) {
-        "1.0.0"
     }
 }
