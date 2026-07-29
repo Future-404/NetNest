@@ -120,3 +120,60 @@ fun Modifier.glassmorphicCard(
         .background(backgroundBrush)
         .border(1.dp, borderBrush, shape)
 }
+
+/**
+ * A denser glass surface for menus and drawers that contain text.
+ *
+ * Decorative glass can stay translucent, but interactive overlays need a stable
+ * contrast floor so content behind them does not compete with labels and icons.
+ */
+@Composable
+fun Modifier.glassmorphicOverlay(
+    shape: Shape = RoundedCornerShape(22.dp),
+    elevation: Dp = 14.dp,
+    borderWidth: Dp = 1.dp,
+    isDark: Boolean = MaterialTheme.colorScheme.background.luminance() < 0.5f
+): Modifier {
+    val surface = MaterialTheme.colorScheme.surface
+    val surfaceVariant = MaterialTheme.colorScheme.surfaceVariant
+    val backgroundBrush = Brush.linearGradient(
+        colors = if (isDark) {
+            listOf(
+                surfaceVariant.copy(alpha = 0.96f),
+                surface.copy(alpha = 0.94f)
+            )
+        } else {
+            listOf(
+                surface.copy(alpha = 0.97f),
+                surfaceVariant.copy(alpha = 0.94f)
+            )
+        }
+    )
+    val borderBrush = Brush.linearGradient(
+        colors = if (isDark) {
+            listOf(
+                Color.White.copy(alpha = 0.30f),
+                Color.White.copy(alpha = 0.12f)
+            )
+        } else {
+            listOf(
+                Color.White.copy(alpha = 0.80f),
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.24f)
+            )
+        }
+    )
+
+    return this
+        .shadow(
+            elevation = elevation,
+            shape = shape,
+            clip = false,
+            ambientColor = if (isDark) Color.Black.copy(alpha = 0.55f)
+            else Color.Black.copy(alpha = 0.16f),
+            spotColor = if (isDark) Color.Black.copy(alpha = 0.72f)
+            else Color.Black.copy(alpha = 0.22f)
+        )
+        .clip(shape)
+        .background(backgroundBrush)
+        .border(borderWidth, borderBrush, shape)
+}

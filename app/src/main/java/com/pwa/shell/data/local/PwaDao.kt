@@ -31,6 +31,18 @@ interface PwaDao {
     @Query("UPDATE pwas SET displayOrder = :displayOrder WHERE id = :pwaId")
     suspend fun updateDisplayOrder(pwaId: Long, displayOrder: Int)
 
+    @Query(
+        """
+        UPDATE pwas
+        SET folderId = :folderId, folderOrder = :folderOrder
+        WHERE id = :pwaId
+        """
+    )
+    suspend fun updateFolder(pwaId: Long, folderId: Long?, folderOrder: Int)
+
+    @Query("SELECT * FROM pwas WHERE folderId = :folderId ORDER BY folderOrder ASC, addedTime ASC")
+    suspend fun getPwasInFolderOnce(folderId: Long): List<PwaEntity>
+
     @Transaction
     suspend fun batchUpdateDisplayOrder(pwas: List<PwaEntity>) {
         pwas.forEach { pwa ->

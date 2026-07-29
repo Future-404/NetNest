@@ -1,9 +1,13 @@
 package com.pwa.shell.data.local
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "pwas")
+@Entity(
+    tableName = "pwas",
+    indices = [Index(value = ["folderId"])]
+)
 data class PwaEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -39,5 +43,11 @@ data class PwaEntity(
      * Per-PWA visual preference. The session manager remains available for deep
      * links and shortcuts even when this app hides the switcher handle.
      */
-    val showSwitcherHandle: Boolean = true
+    val showSwitcherHandle: Boolean = true,
+    /**
+     * Home-screen organization only. Folder membership never changes WebView
+     * profile ownership, cookies, storage, shortcuts, or session lifecycle.
+     */
+    val folderId: Long? = null,
+    val folderOrder: Int = 0
 )

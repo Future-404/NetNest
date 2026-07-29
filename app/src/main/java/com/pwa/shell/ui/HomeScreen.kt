@@ -5,8 +5,10 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.scrollBy
@@ -23,8 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -38,8 +38,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -58,17 +59,26 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
 import coil.ImageLoader
 import coil.request.ImageRequest
 import com.pwa.shell.data.local.PwaEntity
+import com.pwa.shell.data.local.PwaFolderEntity
 import com.pwa.shell.ui.theme.glassmorphic
+import com.pwa.shell.ui.theme.glassmorphicOverlay
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
@@ -78,6 +88,13 @@ private sealed interface HomeGridItem {
 
     data class Pwa(val value: PwaEntity) : HomeGridItem {
         override val stableKey: Any = value.id
+    }
+
+    data class Folder(
+        val value: PwaFolderEntity,
+        val members: List<PwaEntity>
+    ) : HomeGridItem {
+        override val stableKey: Any = "netnest_folder_${value.id}"
     }
 
     data object Settings : HomeGridItem {
@@ -91,10 +108,30 @@ private sealed interface HomeGridItem {
 
 private fun buildHomeGridItems(
     pwas: List<PwaEntity>,
+    folders: List<PwaFolderEntity>,
     settingsTileIndex: Int,
     addAppTileIndex: Int
 ): List<HomeGridItem> {
-    val result = pwas.mapTo(mutableListOf<HomeGridItem>()) { HomeGridItem.Pwa(it) }
+    val pwasById = pwas.associateBy(PwaEntity::id)
+    val foldersById = folders.associateBy(PwaFolderEntity::id)
+    val result = persistentHomeOrder(pwas, folders)
+        .mapNotNullTo(mutableListOf()) { entry ->
+            when (entry) {
+                is HomeOrderEntry.Pwa ->
+                    pwasById[entry.id]?.let(HomeGridItem::Pwa)
+                is HomeOrderEntry.Folder -> foldersById[entry.id]?.let { folder ->
+                    HomeGridItem.Folder(
+                        value = folder,
+                        members = pwas
+                            .filter { it.folderId == folder.id }
+                            .sortedWith(
+                                compareBy<PwaEntity> { it.folderOrder }
+                                    .thenBy { it.addedTime }
+                            )
+                    )
+                }
+            }
+        }
 
     val systemItems = listOf(
         HomeGridItem.Settings to settingsTileIndex,
@@ -116,10 +153,85 @@ internal fun stableKeyTargetIndex(
     return orderedKeys.indexOfFirst { it == targetKey }.takeIf { it >= 0 }
 }
 
+private class NetNestMenuPositionProvider(
+    private val offset: IntOffset,
+    private val windowMarginPx: Int
+) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize
+    ): IntOffset {
+        val maxX = (windowSize.width - popupContentSize.width - windowMarginPx)
+            .coerceAtLeast(windowMarginPx)
+        val preferredX = if (layoutDirection == LayoutDirection.Ltr) {
+            anchorBounds.left + offset.x
+        } else {
+            anchorBounds.right - popupContentSize.width - offset.x
+        }
+        val x = preferredX.coerceIn(windowMarginPx, maxX)
+
+        val maxY = (windowSize.height - popupContentSize.height - windowMarginPx)
+            .coerceAtLeast(windowMarginPx)
+        val below = anchorBounds.bottom + offset.y
+        val above = anchorBounds.top - popupContentSize.height - offset.y
+        val preferredY = when {
+            below <= maxY -> below
+            above >= windowMarginPx -> above
+            else -> below.coerceIn(windowMarginPx, maxY)
+        }
+        return IntOffset(x, preferredY.coerceIn(windowMarginPx, maxY))
+    }
+}
+
+@Composable
+private fun NetNestDropdownMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    offset: DpOffset = DpOffset.Zero,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    if (!expanded) return
+
+    val density = LocalDensity.current
+    val positionProvider = remember(offset, density) {
+        NetNestMenuPositionProvider(
+            offset = with(density) {
+                IntOffset(offset.x.roundToPx(), offset.y.roundToPx())
+            },
+            windowMarginPx = with(density) { 8.dp.roundToPx() }
+        )
+    }
+    val shape = RoundedCornerShape(22.dp)
+
+    Popup(
+        popupPositionProvider = positionProvider,
+        onDismissRequest = onDismissRequest,
+        properties = PopupProperties(
+            focusable = true,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .width(232.dp)
+                .heightIn(max = 420.dp)
+                .glassmorphicOverlay(shape = shape, elevation = 16.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp),
+            content = content
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
+    pwas: List<PwaEntity>,
+    folders: List<PwaFolderEntity>,
     settingsTileIndex: Int,
     onSettingsTileIndexChanged: (Int) -> Unit,
     addAppTileIndex: Int,
@@ -136,15 +248,24 @@ fun HomeScreen(
     var addAppCustomIcon by remember { mutableStateOf(globalSettingsPreferences.loadAddAppCustomIcon()) }
     var targetSystemAppForIconPicker by remember { mutableStateOf<String?>(null) }
 
-    val pwas by viewModel.pwaList.collectAsState(initial = emptyList())
     val uiState by viewModel.uiState.collectAsState()
     val homeScope = rememberCoroutineScope()
     val gridState = rememberLazyGridState()
-    var displayedItems by remember { mutableStateOf<List<HomeGridItem>>(emptyList()) }
+    var displayedItems by remember(
+        pwas,
+        folders,
+        settingsTileIndex,
+        addAppTileIndex
+    ) {
+        mutableStateOf(
+            buildHomeGridItems(pwas, folders, settingsTileIndex, addAppTileIndex)
+        )
+    }
     var dragStartOrder by remember { mutableStateOf<List<HomeGridItem>>(emptyList()) }
     var draggedItemKey by remember { mutableStateOf<Any?>(null) }
     var draggedCenter by remember { mutableStateOf(Offset.Zero) }
     var dragInMotion by remember { mutableStateOf(false) }
+    var folderDropTargetKey by remember { mutableStateOf<Any?>(null) }
     val autoScrollEdge = with(LocalDensity.current) { 72.dp.toPx() }
 
     val systemIconPickerLauncher = rememberLauncherForActivityResult(
@@ -190,35 +311,73 @@ fun HomeScreen(
         Toast.makeText(context, "已恢复默认图标", Toast.LENGTH_SHORT).show()
     }
 
-    LaunchedEffect(pwas, settingsTileIndex, addAppTileIndex) {
-        if (draggedItemKey == null) {
-            displayedItems = buildHomeGridItems(pwas, settingsTileIndex, addAppTileIndex)
-        }
-    }
-
     fun persistHomeOrder(items: List<HomeGridItem>) {
-        val reorderedPwas = items.mapNotNull { (it as? HomeGridItem.Pwa)?.value }
+        val entries = items.mapNotNull {
+            when (it) {
+                is HomeGridItem.Pwa -> HomeOrderEntry.Pwa(it.value.id)
+                is HomeGridItem.Folder -> HomeOrderEntry.Folder(it.value.id)
+                HomeGridItem.Settings, HomeGridItem.AddApp -> null
+            }
+        }
         val newSettingsIndex = items.indexOf(HomeGridItem.Settings).coerceAtLeast(0)
         val newAddAppIndex = items.indexOf(HomeGridItem.AddApp).coerceAtLeast(0)
         onSettingsTileIndexChanged(newSettingsIndex)
         onAddAppTileIndexChanged(newAddAppIndex)
-        viewModel.reorderPwas(reorderedPwas)
+        viewModel.reorderHomeItems(entries)
     }
 
     fun moveDraggedItemTo(position: Offset) {
         val draggedIndex = displayedItems.indexOfFirst { it.stableKey == draggedItemKey }
-        val targetKey = gridState.layoutInfo.visibleItemsInfo
+        val targetInfo = gridState.layoutInfo.visibleItemsInfo
             .firstOrNull { item ->
                 position.x >= item.offset.x &&
                     position.x <= item.offset.x + item.size.width &&
                     position.y >= item.offset.y &&
                     position.y <= item.offset.y + item.size.height
             }
-            ?.key
+        val targetKey = targetInfo?.key
         val targetIndex = stableKeyTargetIndex(
             orderedKeys = displayedItems.map { it.stableKey },
             targetKey = targetKey
         )
+        val draggedItem = displayedItems.getOrNull(draggedIndex)
+        val targetItem = targetIndex?.let(displayedItems::getOrNull)
+        val isCenteredOnTarget = targetInfo?.let { info ->
+            val insetX = info.size.width * 0.18f
+            val insetY = info.size.height * 0.14f
+            position.x >= info.offset.x + insetX &&
+                position.x <= info.offset.x + info.size.width - insetX &&
+                position.y >= info.offset.y + insetY &&
+                position.y <= info.offset.y + info.size.height - insetY
+        } == true
+        val targetKind = when {
+            draggedItem !is HomeGridItem.Pwa ||
+                draggedItem.value.folderId != null ||
+                targetItem?.stableKey == draggedItem.stableKey ->
+                PwaDropTargetKind.NONE
+            targetItem is HomeGridItem.Pwa -> PwaDropTargetKind.PWA
+            targetItem is HomeGridItem.Folder -> PwaDropTargetKind.FOLDER
+            else -> PwaDropTargetKind.NONE
+        }
+        when (
+            pwaTargetDragAction(
+                targetKind = targetKind,
+                isCentered = isCenteredOnTarget,
+                wasCenteredOnSameTarget =
+                    folderDropTargetKey == targetItem?.stableKey
+            )
+        ) {
+            PwaTargetDragAction.WAIT_FOR_CENTER -> {
+                folderDropTargetKey = null
+                return
+            }
+            PwaTargetDragAction.GROUP -> {
+                folderDropTargetKey = targetItem?.stableKey
+                return
+            }
+            PwaTargetDragAction.REORDER -> Unit
+        }
+        folderDropTargetKey = null
         if (draggedIndex >= 0 && targetIndex != null && draggedIndex != targetIndex) {
             displayedItems = moveListItem(displayedItems, draggedIndex, targetIndex)
         }
@@ -245,6 +404,13 @@ fun HomeScreen(
     var showEditDialog by remember { mutableStateOf<PwaEntity?>(null) }
     var showManualAddDialog by remember { mutableStateOf<UiState.Error?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf<PwaEntity?>(null) }
+    var openFolderId by remember { mutableStateOf<Long?>(null) }
+    var renameFolderId by remember { mutableStateOf<Long?>(null) }
+    var pendingFolderCreation by remember {
+        mutableStateOf<Pair<PwaEntity, PwaEntity>?>(null)
+    }
+    var organizePwa by remember { mutableStateOf<PwaEntity?>(null) }
+    var pendingDissolveFolder by remember { mutableStateOf<PwaFolderEntity?>(null) }
 
     // Configure Coil ImageLoader with SVG support
     val imageLoader = remember {
@@ -274,69 +440,10 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
-                // Glassmorphic top header
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 28.dp, bottom = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        // Title Bar with Neon Glow Accent
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text(
-                                        text = "NetNest",
-                                        style = MaterialTheme.typography.headlineMedium.copy(
-                                            fontWeight = FontWeight.ExtraBold,
-                                            letterSpacing = (-0.5).sp
-                                        ),
-                                        color = MaterialTheme.colorScheme.onBackground
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(
-                                                Brush.linearGradient(
-                                                    listOf(
-                                                        MaterialTheme.colorScheme.primary,
-                                                        MaterialTheme.colorScheme.secondary
-                                                    )
-                                                )
-                                            )
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = "PRO",
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onPrimary
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = "共 ${pwas.size} 个网络应用桌面入口",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                    }
-                }
-
                     itemsIndexed(
                         displayedItems,
                         key = { _, item -> item.stableKey }
-                    ) { index, item ->
+                    ) { _, item ->
                         val itemInfo = gridState.layoutInfo.visibleItemsInfo
                             .firstOrNull { it.key == item.stableKey }
                         val dragTranslation = if (
@@ -354,18 +461,6 @@ fun HomeScreen(
                         } else {
                             Modifier.animateItemPlacement()
                         }
-                        fun moveItem(direction: Int) {
-                            val targetIndex = index + direction
-                            if (targetIndex in displayedItems.indices) {
-                                val reordered = moveListItem(
-                                    displayedItems,
-                                    index,
-                                    targetIndex
-                                )
-                                displayedItems = reordered
-                                persistHomeOrder(reordered)
-                            }
-                        }
                         fun beginDrag() {
                             val info = gridState.layoutInfo.visibleItemsInfo
                                 .firstOrNull { it.key == item.stableKey }
@@ -373,6 +468,7 @@ fun HomeScreen(
                                 dragStartOrder = displayedItems
                                 draggedItemKey = item.stableKey
                                 dragInMotion = false
+                                folderDropTargetKey = null
                                 draggedCenter = Offset(
                                     info.offset.x + info.size.width / 2f,
                                     info.offset.y + info.size.height / 2f
@@ -385,16 +481,49 @@ fun HomeScreen(
                             moveDraggedItemTo(draggedCenter)
                         }
                         fun endDrag(moved: Boolean) {
-                            if (moved && displayedItems != dragStartOrder) {
+                            val source = dragStartOrder.firstOrNull {
+                                it.stableKey == draggedItemKey
+                            }
+                            val target = displayedItems.firstOrNull {
+                                it.stableKey == folderDropTargetKey
+                            }
+                            if (moved && source is HomeGridItem.Pwa && target != null) {
+                                displayedItems = dragStartOrder
+                                when (target) {
+                                    is HomeGridItem.Pwa -> {
+                                        pendingFolderCreation = source.value to target.value
+                                    }
+                                    is HomeGridItem.Folder -> {
+                                        viewModel.addPwaToFolder(
+                                            source.value.id,
+                                            target.value.id
+                                        ) { result ->
+                                            Toast.makeText(
+                                                context,
+                                                result.fold(
+                                                    onSuccess = { "已加入“${target.value.name}”" },
+                                                    onFailure = {
+                                                        it.localizedMessage ?: "加入文件夹失败"
+                                                    }
+                                                ),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
+                                    HomeGridItem.Settings, HomeGridItem.AddApp -> Unit
+                                }
+                            } else if (moved && displayedItems != dragStartOrder) {
                                 persistHomeOrder(displayedItems)
                             }
                             dragInMotion = false
                             draggedItemKey = null
+                            folderDropTargetKey = null
                         }
                         fun cancelDrag() {
                             displayedItems = dragStartOrder
                             dragInMotion = false
                             draggedItemKey = null
+                            folderDropTargetKey = null
                         }
 
                         when (item) {
@@ -402,11 +531,11 @@ fun HomeScreen(
                                 val pwa = item.value
                                 PwaGridItem(
                                     pwa = pwa,
-                                    index = index,
-                                    totalItems = displayedItems.size,
                                     imageLoader = imageLoader,
                                     modifier = itemModifier,
                                     isDragging = draggedItemKey == item.stableKey,
+                                    isFolderDropTarget =
+                                        folderDropTargetKey == item.stableKey,
                                     dragTranslation = dragTranslation,
                                     onClick = { onPwaClick(pwa) },
                                     onDelete = { showDeleteConfirmDialog = pwa },
@@ -435,7 +564,26 @@ fun HomeScreen(
                                             ).show()
                                         }
                                     },
-                                    onMove = ::moveItem,
+                                    onOrganize = { organizePwa = pwa },
+                                    onDragStart = ::beginDrag,
+                                    onDrag = ::dragBy,
+                                    onDragEnd = ::endDrag,
+                                    onDragCancel = ::cancelDrag
+                                )
+                            }
+                            is HomeGridItem.Folder -> {
+                                FolderGridItem(
+                                    folder = item.value,
+                                    members = item.members,
+                                    imageLoader = imageLoader,
+                                    modifier = itemModifier,
+                                    isDragging = draggedItemKey == item.stableKey,
+                                    isFolderDropTarget =
+                                        folderDropTargetKey == item.stableKey,
+                                    dragTranslation = dragTranslation,
+                                    onClick = { openFolderId = item.value.id },
+                                    onRename = { renameFolderId = item.value.id },
+                                    onDissolve = { pendingDissolveFolder = item.value },
                                     onDragStart = ::beginDrag,
                                     onDrag = ::dragBy,
                                     onDragEnd = ::endDrag,
@@ -444,8 +592,6 @@ fun HomeScreen(
                             }
                             HomeGridItem.Settings -> {
                                 SettingsGridItem(
-                                    index = index,
-                                    totalItems = displayedItems.size,
                                     customIconPath = settingsCustomIcon,
                                     imageLoader = imageLoader,
                                     modifier = itemModifier,
@@ -457,7 +603,6 @@ fun HomeScreen(
                                         systemIconPickerLauncher.launch(arrayOf("image/*"))
                                     },
                                     onResetIcon = { resetSystemAppIcon("settings") },
-                                    onMove = ::moveItem,
                                     onDragStart = ::beginDrag,
                                     onDrag = ::dragBy,
                                     onDragEnd = ::endDrag,
@@ -466,8 +611,6 @@ fun HomeScreen(
                             }
                             HomeGridItem.AddApp -> {
                                 AddAppGridItem(
-                                    index = index,
-                                    totalItems = displayedItems.size,
                                     customIconPath = addAppCustomIcon,
                                     imageLoader = imageLoader,
                                     modifier = itemModifier,
@@ -479,7 +622,6 @@ fun HomeScreen(
                                         systemIconPickerLauncher.launch(arrayOf("image/*"))
                                     },
                                     onResetIcon = { resetSystemAppIcon("add_app") },
-                                    onMove = ::moveItem,
                                     onDragStart = ::beginDrag,
                                     onDrag = ::dragBy,
                                     onDragEnd = ::endDrag,
@@ -688,6 +830,504 @@ fun HomeScreen(
                     }
                 )
             }
+
+            pendingFolderCreation?.let { (firstPwa, secondPwa) ->
+                FolderNameDialog(
+                    title = "新建文件夹",
+                    initialName = "新文件夹",
+                    confirmLabel = "创建",
+                    onDismiss = { pendingFolderCreation = null },
+                    onConfirm = { name ->
+                        viewModel.createFolder(firstPwa.id, secondPwa.id, name) { result ->
+                            Toast.makeText(
+                                context,
+                                result.fold(
+                                    onSuccess = { "文件夹已创建" },
+                                    onFailure = {
+                                        it.localizedMessage ?: "创建文件夹失败"
+                                    }
+                                ),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        pendingFolderCreation = null
+                    }
+                )
+            }
+
+            renameFolderId?.let { folderId ->
+                val folder = folders.firstOrNull { it.id == folderId }
+                if (folder != null) {
+                    FolderNameDialog(
+                        title = "重命名文件夹",
+                        initialName = folder.name,
+                        confirmLabel = "保存",
+                        onDismiss = { renameFolderId = null },
+                        onConfirm = { name ->
+                            viewModel.renameFolder(folder.id, name) { result ->
+                                result.exceptionOrNull()?.let {
+                                    Toast.makeText(
+                                        context,
+                                        it.localizedMessage ?: "重命名失败",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                            renameFolderId = null
+                        }
+                    )
+                } else {
+                    LaunchedEffect(folderId) { renameFolderId = null }
+                }
+            }
+
+            organizePwa?.let { pwa ->
+                OrganizePwaDialog(
+                    pwa = pwa,
+                    folders = folders,
+                    rootPwas = pwas.filter { it.folderId == null && it.id != pwa.id },
+                    onDismiss = { organizePwa = null },
+                    onFolderSelected = { folder ->
+                        viewModel.addPwaToFolder(pwa.id, folder.id) { result ->
+                            Toast.makeText(
+                                context,
+                                result.fold(
+                                    onSuccess = { "已加入“${folder.name}”" },
+                                    onFailure = {
+                                        it.localizedMessage ?: "加入文件夹失败"
+                                    }
+                                ),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        organizePwa = null
+                    },
+                    onPwaSelected = { otherPwa ->
+                        organizePwa = null
+                        pendingFolderCreation = pwa to otherPwa
+                    }
+                )
+            }
+
+            openFolderId?.let { folderId ->
+                val folder = folders.firstOrNull { it.id == folderId }
+                val members = pwas
+                    .filter { it.folderId == folderId }
+                    .sortedWith(
+                        compareBy<PwaEntity> { it.folderOrder }
+                            .thenBy { it.addedTime }
+                    )
+                if (folder != null) {
+                    FolderContentsDialog(
+                        folder = folder,
+                        members = members,
+                        imageLoader = imageLoader,
+                        onDismiss = { openFolderId = null },
+                        onOpen = { pwa ->
+                            openFolderId = null
+                            onPwaClick(pwa)
+                        },
+                        onEdit = { pwa ->
+                            openFolderId = null
+                            showEditDialog = pwa
+                        },
+                        onRemove = { pwa ->
+                            if (members.size <= 2) openFolderId = null
+                            viewModel.removePwaFromFolder(pwa.id) { result ->
+                                Toast.makeText(
+                                    context,
+                                    result.fold(
+                                        onSuccess = {
+                                            if (members.size <= 2) {
+                                                "文件夹已自动解散"
+                                            } else {
+                                                "“${pwa.name}”已移出文件夹"
+                                            }
+                                        },
+                                        onFailure = {
+                                            it.localizedMessage ?: "移出文件夹失败"
+                                        }
+                                    ),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        },
+                        onDelete = { pwa ->
+                            openFolderId = null
+                            showDeleteConfirmDialog = pwa
+                        },
+                        onRename = {
+                            openFolderId = null
+                            renameFolderId = folder.id
+                        },
+                        onDissolve = {
+                            openFolderId = null
+                            pendingDissolveFolder = folder
+                        }
+                    )
+                } else {
+                    LaunchedEffect(folderId) { openFolderId = null }
+                }
+            }
+
+            pendingDissolveFolder?.let { folder ->
+                AlertDialog(
+                    onDismissRequest = { pendingDissolveFolder = null },
+                    title = { Text("解散“${folder.name}”？") },
+                    text = {
+                        Text("文件夹内的应用会回到主界面，应用及其数据不会被删除。")
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                viewModel.dissolveFolder(folder.id) { result ->
+                                    Toast.makeText(
+                                        context,
+                                        result.fold(
+                                            onSuccess = { "文件夹已解散" },
+                                            onFailure = {
+                                                it.localizedMessage ?: "解散文件夹失败"
+                                            }
+                                        ),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                pendingDissolveFolder = null
+                            }
+                        ) {
+                            Text("解散")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingDissolveFolder = null }) {
+                            Text("取消")
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderNameDialog(
+    title: String,
+    initialName: String,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember(initialName) { mutableStateOf(initialName) }
+    val normalizedName = normalizedFolderName(name)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("文件夹名称") },
+                supportingText = { Text("${name.trim().length}/30") },
+                isError = name.isNotBlank() && normalizedName == null,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(
+                enabled = normalizedName != null,
+                onClick = { normalizedName?.let(onConfirm) }
+            ) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+private fun OrganizePwaDialog(
+    pwa: PwaEntity,
+    folders: List<PwaFolderEntity>,
+    rootPwas: List<PwaEntity>,
+    onDismiss: () -> Unit,
+    onFolderSelected: (PwaFolderEntity) -> Unit,
+    onPwaSelected: (PwaEntity) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("整理“${pwa.name}”") },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (folders.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "加入现有文件夹",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                    items(
+                        count = folders.size,
+                        key = { index -> "organize_folder_${folders[index].id}" }
+                    ) { index ->
+                        val folder = folders[index]
+                        ListItem(
+                            headlineContent = { Text(folder.name) },
+                            leadingContent = {
+                                FolderGlyph(modifier = Modifier.size(24.dp))
+                            },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { onFolderSelected(folder) }
+                        )
+                    }
+                }
+
+                if (rootPwas.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "与另一个应用新建文件夹",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 14.dp, bottom = 8.dp)
+                        )
+                    }
+                    items(
+                        count = rootPwas.size,
+                        key = { index -> "organize_pwa_${rootPwas[index].id}" }
+                    ) { index ->
+                        val other = rootPwas[index]
+                        ListItem(
+                            headlineContent = { Text(other.name) },
+                            leadingContent = {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                            },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { onPwaSelected(other) }
+                        )
+                    }
+                }
+
+                if (folders.isEmpty() && rootPwas.isEmpty()) {
+                    item {
+                        Text(
+                            text = "至少还需要一个主界面应用，才能创建文件夹。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FolderContentsDialog(
+    folder: PwaFolderEntity,
+    members: List<PwaEntity>,
+    imageLoader: ImageLoader,
+    onDismiss: () -> Unit,
+    onOpen: (PwaEntity) -> Unit,
+    onEdit: (PwaEntity) -> Unit,
+    onRemove: (PwaEntity) -> Unit,
+    onDelete: (PwaEntity) -> Unit,
+    onRename: () -> Unit,
+    onDissolve: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        val shape = RoundedCornerShape(30.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .heightIn(min = 260.dp, max = 620.dp)
+                .glassmorphicOverlay(shape = shape, elevation = 20.dp)
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = folder.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onRename) {
+                    Icon(Icons.Default.Edit, contentDescription = "重命名文件夹")
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "关闭")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                itemsIndexed(
+                    items = members,
+                    key = { _, member -> "folder_member_${member.id}" }
+                ) { _, member ->
+                    FolderMemberItem(
+                        pwa = member,
+                        imageLoader = imageLoader,
+                        onOpen = { onOpen(member) },
+                        onEdit = { onEdit(member) },
+                        onRemove = { onRemove(member) },
+                        onDelete = { onDelete(member) }
+                    )
+                }
+            }
+
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+            )
+            TextButton(
+                onClick = onDissolve,
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Text("解散文件夹", color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FolderMemberItem(
+    pwa: PwaEntity,
+    imageLoader: ImageLoader,
+    onOpen: () -> Unit,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val iconShape = RoundedCornerShape(18.dp)
+    val iconFile = pwa.iconPath.takeIf(String::isNotBlank)?.let(::File)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onOpen,
+                onLongClick = { expanded = true }
+            )
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .glassmorphic(shape = iconShape, elevation = 3.dp)
+                .clip(iconShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (iconFile?.isFile == true) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(iconFile)
+                        .build(),
+                    imageLoader = imageLoader,
+                    contentDescription = pwa.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Home,
+                    contentDescription = pwa.name,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(30.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(7.dp))
+        Text(
+            text = pwa.name,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Box(modifier = Modifier.size(0.dp)) {
+            NetNestDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                offset = DpOffset(x = (-28).dp, y = (-18).dp)
+            ) {
+                DropdownMenuItem(
+                    text = { Text("打开") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Home, contentDescription = null)
+                    },
+                    onClick = {
+                        expanded = false
+                        onOpen()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("编辑") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onEdit()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("移出文件夹") },
+                    leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onRemove()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("删除应用") },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                    colors = MenuDefaults.itemColors(
+                        textColor = MaterialTheme.colorScheme.error,
+                        leadingIconColor = MaterialTheme.colorScheme.error
+                    ),
+                    onClick = {
+                        expanded = false
+                        onDelete()
+                    }
+                )
+            }
         }
     }
 }
@@ -696,17 +1336,16 @@ fun HomeScreen(
 @Composable
 fun PwaGridItem(
     pwa: PwaEntity,
-    index: Int,
-    totalItems: Int,
     imageLoader: ImageLoader,
     modifier: Modifier = Modifier,
     isDragging: Boolean,
+    isFolderDropTarget: Boolean,
     dragTranslation: Offset,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
     onAddToHomeScreen: () -> Unit,
-    onMove: (Int) -> Unit,
+    onOrganize: () -> Unit,
     onDragStart: () -> Unit,
     onDrag: (Offset) -> Unit,
     onDragEnd: (Boolean) -> Unit,
@@ -728,8 +1367,13 @@ fun PwaGridItem(
             .graphicsLayer {
                 translationX = dragTranslation.x
                 translationY = dragTranslation.y
-                scaleX = if (isDragging) 1.10f else 1f
-                scaleY = if (isDragging) 1.10f else 1f
+                val scale = when {
+                    isDragging -> 1.10f
+                    isFolderDropTarget -> 1.07f
+                    else -> 1f
+                }
+                scaleX = scale
+                scaleY = scale
             }
             .pointerInput(pwa.id, dragTouchSlop) {
                 val dragGate = LongPressDragGate(dragTouchSlop)
@@ -748,7 +1392,7 @@ fun PwaGridItem(
                     },
                     onDragEnd = {
                         latestOnDragEnd(dragGate.isDragging)
-                        if (!dragGate.isDragging && totalItems > 1) expanded = true
+                        if (!dragGate.isDragging) expanded = true
                     },
                     onDragCancel = {
                         dragGate.reset()
@@ -822,13 +1466,10 @@ fun PwaGridItem(
 
         // Dropdown options
         Box(modifier = Modifier.size(0.dp)) {
-            DropdownMenu(
+            NetNestDropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                offset = DpOffset(x = (-30).dp, y = (-20).dp),
-                modifier = Modifier
-                    .width(232.dp)
-                    .glassmorphic(shape = RoundedCornerShape(20.dp), elevation = 12.dp)
+                offset = DpOffset(x = (-30).dp, y = (-20).dp)
             ) {
                 Text(
                     text = pwa.name,
@@ -857,29 +1498,18 @@ fun PwaGridItem(
                         onAddToHomeScreen()
                     }
                 )
+                DropdownMenuItem(
+                    text = { Text("整理到文件夹", fontWeight = FontWeight.Medium) },
+                    leadingIcon = { FolderGlyph(modifier = Modifier.size(24.dp)) },
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    onClick = {
+                        expanded = false
+                        onOrganize()
+                    }
+                )
 
-                if (index > 0) {
-                    DropdownMenuItem(
-                        text = { Text("向左移动", fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null) },
-                        modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
-                        onClick = {
-                            expanded = false
-                            onMove(-1)
-                        }
-                    )
-                }
-                if (index < totalItems - 1) {
-                    DropdownMenuItem(
-                        text = { Text("向右移动", fontWeight = FontWeight.Medium) },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
-                        modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
-                        onClick = {
-                            expanded = false
-                            onMove(1)
-                        }
-                    )
-                }
                 HorizontalDivider(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
@@ -906,9 +1536,254 @@ fun PwaGridItem(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
+private fun FolderGridItem(
+    folder: PwaFolderEntity,
+    members: List<PwaEntity>,
+    imageLoader: ImageLoader,
+    modifier: Modifier = Modifier,
+    isDragging: Boolean,
+    isFolderDropTarget: Boolean,
+    dragTranslation: Offset,
+    onClick: () -> Unit,
+    onRename: () -> Unit,
+    onDissolve: () -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: (Boolean) -> Unit,
+    onDragCancel: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val hapticFeedback = LocalHapticFeedback.current
+    val dragTouchSlop = LocalViewConfiguration.current.touchSlop
+    val latestOnDragStart by rememberUpdatedState(onDragStart)
+    val latestOnDrag by rememberUpdatedState(onDrag)
+    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
+    val latestOnDragCancel by rememberUpdatedState(onDragCancel)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                translationX = dragTranslation.x
+                translationY = dragTranslation.y
+                val scale = when {
+                    isDragging -> 1.10f
+                    isFolderDropTarget -> 1.07f
+                    else -> 1f
+                }
+                scaleX = scale
+                scaleY = scale
+            }
+            .pointerInput(folder.id, dragTouchSlop) {
+                val dragGate = LongPressDragGate(dragTouchSlop)
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        dragGate.reset()
+                        expanded = false
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        latestOnDragStart()
+                    },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragGate.track(amount)?.let(latestOnDrag)
+                    },
+                    onDragEnd = {
+                        latestOnDragEnd(dragGate.isDragging)
+                        if (!dragGate.isDragging) expanded = true
+                    },
+                    onDragCancel = {
+                        dragGate.reset()
+                        latestOnDragCancel()
+                    }
+                )
+            }
+            .semantics {
+                onLongClick(label = "打开文件夹操作") {
+                    expanded = true
+                    true
+                }
+            }
+            .clickable(enabled = !isDragging, onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        FolderPreview(
+            members = members,
+            imageLoader = imageLoader,
+            elevated = isDragging || isFolderDropTarget
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = folder.name,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 2.dp)
+        )
+        Box(modifier = Modifier.size(0.dp)) {
+            NetNestDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                offset = DpOffset(x = (-30).dp, y = (-20).dp)
+            ) {
+                Text(
+                    text = folder.name,
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                DropdownMenuItem(
+                    text = { Text("打开文件夹", fontWeight = FontWeight.Medium) },
+                    leadingIcon = {
+                        FolderGlyph(modifier = Modifier.size(24.dp))
+                    },
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    onClick = {
+                        expanded = false
+                        onClick()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("重命名", fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    onClick = {
+                        expanded = false
+                        onRename()
+                    }
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
+                DropdownMenuItem(
+                    text = { Text("解散文件夹", fontWeight = FontWeight.SemiBold) },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                    colors = MenuDefaults.itemColors(
+                        textColor = MaterialTheme.colorScheme.error,
+                        leadingIconColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    onClick = {
+                        expanded = false
+                        onDissolve()
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderGlyph(
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.primary
+) {
+    Canvas(modifier = modifier) {
+        val corner = size.minDimension * 0.16f
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(0f, size.height * 0.06f),
+            size = Size(size.width * 0.52f, size.height * 0.36f),
+            cornerRadius = CornerRadius(corner, corner)
+        )
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(0f, size.height * 0.24f),
+            size = Size(size.width, size.height * 0.70f),
+            cornerRadius = CornerRadius(corner, corner)
+        )
+    }
+}
+
+@Composable
+private fun FolderPreview(
+    members: List<PwaEntity>,
+    imageLoader: ImageLoader,
+    elevated: Boolean
+) {
+    val shape = RoundedCornerShape(22.dp)
+    Column(
+        modifier = Modifier
+            .size(64.dp)
+            .glassmorphic(
+                shape = shape,
+                elevation = if (elevated) 14.dp else 4.dp
+            )
+            .padding(6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        repeat(3) { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                repeat(3) { column ->
+                    val member = members.getOrNull(row * 3 + column)
+                    FolderPreviewIcon(member = member, imageLoader = imageLoader)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderPreviewIcon(
+    member: PwaEntity?,
+    imageLoader: ImageLoader
+) {
+    if (member == null) {
+        Spacer(modifier = Modifier.size(16.dp))
+        return
+    }
+    val iconFile = member.iconPath.takeIf(String::isNotBlank)?.let(::File)
+    if (iconFile?.isFile == true) {
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(iconFile)
+                .build(),
+            imageLoader = imageLoader,
+            contentDescription = null,
+            modifier = Modifier
+                .size(16.dp)
+                .clip(RoundedCornerShape(4.dp)),
+            contentScale = ContentScale.Crop
+        )
+    } else {
+        Surface(
+            modifier = Modifier.size(16.dp),
+            shape = RoundedCornerShape(4.dp),
+            color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Default.Home,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(10.dp)
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
 private fun SettingsGridItem(
-    index: Int,
-    totalItems: Int,
     customIconPath: String?,
     imageLoader: ImageLoader,
     modifier: Modifier = Modifier,
@@ -917,7 +1792,6 @@ private fun SettingsGridItem(
     onClick: () -> Unit,
     onChangeIcon: () -> Unit,
     onResetIcon: () -> Unit,
-    onMove: (Int) -> Unit,
     onDragStart: () -> Unit,
     onDrag: (Offset) -> Unit,
     onDragEnd: (Boolean) -> Unit,
@@ -957,7 +1831,7 @@ private fun SettingsGridItem(
                     },
                     onDragEnd = {
                         latestOnDragEnd(dragGate.isDragging)
-                        if (!dragGate.isDragging && totalItems > 1) expanded = true
+                        if (!dragGate.isDragging) expanded = true
                     },
                     onDragCancel = {
                         dragGate.reset()
@@ -967,12 +1841,8 @@ private fun SettingsGridItem(
             }
             .semantics {
                 onLongClick(label = "移动设置") {
-                    if (totalItems > 1) {
-                        expanded = true
-                        true
-                    } else {
-                        false
-                    }
+                    expanded = true
+                    true
                 }
             }
             .clickable(enabled = !isDragging, onClick = onClick)
@@ -1032,13 +1902,10 @@ private fun SettingsGridItem(
         )
 
         Box(modifier = Modifier.size(0.dp)) {
-            DropdownMenu(
+            NetNestDropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                offset = DpOffset(x = (-30).dp, y = (-20).dp),
-                modifier = Modifier
-                    .width(232.dp)
-                    .glassmorphic(shape = RoundedCornerShape(20.dp), elevation = 12.dp)
+                offset = DpOffset(x = (-30).dp, y = (-20).dp)
             ) {
                 Text(
                     text = "设置应用",
@@ -1067,42 +1934,6 @@ private fun SettingsGridItem(
                         }
                     )
                 }
-                if (index > 0) {
-                    DropdownMenuItem(
-                        text = { Text("向左移动", fontWeight = FontWeight.Medium) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                contentDescription = null
-                            )
-                        },
-                        modifier = Modifier
-                            .padding(horizontal = 8.dp)
-                            .clip(RoundedCornerShape(12.dp)),
-                        onClick = {
-                            expanded = false
-                            onMove(-1)
-                        }
-                    )
-                }
-                if (index < totalItems - 1) {
-                    DropdownMenuItem(
-                        text = { Text("向右移动", fontWeight = FontWeight.Medium) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = null
-                            )
-                        },
-                        modifier = Modifier
-                            .padding(horizontal = 8.dp)
-                            .clip(RoundedCornerShape(12.dp)),
-                        onClick = {
-                            expanded = false
-                            onMove(1)
-                        }
-                    )
-                }
             }
         }
     }
@@ -1111,8 +1942,6 @@ private fun SettingsGridItem(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AddAppGridItem(
-    index: Int,
-    totalItems: Int,
     customIconPath: String?,
     imageLoader: ImageLoader,
     modifier: Modifier = Modifier,
@@ -1121,7 +1950,6 @@ private fun AddAppGridItem(
     onClick: () -> Unit,
     onChangeIcon: () -> Unit,
     onResetIcon: () -> Unit,
-    onMove: (Int) -> Unit,
     onDragStart: () -> Unit,
     onDrag: (Offset) -> Unit,
     onDragEnd: (Boolean) -> Unit,
@@ -1161,7 +1989,7 @@ private fun AddAppGridItem(
                     },
                     onDragEnd = {
                         latestOnDragEnd(dragGate.isDragging)
-                        if (!dragGate.isDragging && totalItems > 1) expanded = true
+                        if (!dragGate.isDragging) expanded = true
                     },
                     onDragCancel = {
                         dragGate.reset()
@@ -1171,12 +1999,8 @@ private fun AddAppGridItem(
             }
             .semantics {
                 onLongClick(label = "移动或编辑添加应用图标") {
-                    if (totalItems > 1) {
-                        expanded = true
-                        true
-                    } else {
-                        false
-                    }
+                    expanded = true
+                    true
                 }
             }
             .clickable(enabled = !isDragging, onClick = onClick)
@@ -1236,13 +2060,10 @@ private fun AddAppGridItem(
         )
 
         Box(modifier = Modifier.size(0.dp)) {
-            DropdownMenu(
+            NetNestDropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                offset = DpOffset(x = (-30).dp, y = (-20).dp),
-                modifier = Modifier
-                    .width(232.dp)
-                    .glassmorphic(shape = RoundedCornerShape(20.dp), elevation = 12.dp)
+                offset = DpOffset(x = (-30).dp, y = (-20).dp)
             ) {
                 Text(
                     text = "添加应用",
@@ -1277,42 +2098,6 @@ private fun AddAppGridItem(
                         onClick = {
                             expanded = false
                             onResetIcon()
-                        }
-                    )
-                }
-                if (index > 0) {
-                    DropdownMenuItem(
-                        text = { Text("向左移动", fontWeight = FontWeight.Medium) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                contentDescription = null
-                            )
-                        },
-                        modifier = Modifier
-                            .padding(horizontal = 8.dp)
-                            .clip(RoundedCornerShape(12.dp)),
-                        onClick = {
-                            expanded = false
-                            onMove(-1)
-                        }
-                    )
-                }
-                if (index < totalItems - 1) {
-                    DropdownMenuItem(
-                        text = { Text("向右移动", fontWeight = FontWeight.Medium) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = null
-                            )
-                        },
-                        modifier = Modifier
-                            .padding(horizontal = 8.dp)
-                            .clip(RoundedCornerShape(12.dp)),
-                        onClick = {
-                            expanded = false
-                            onMove(1)
                         }
                     )
                 }

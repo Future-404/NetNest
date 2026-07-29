@@ -11,6 +11,14 @@ class AppDatabaseMigrationTest {
         assertEquals(true, defaultPwa().showSwitcherHandle)
     }
 
+    @Test
+    fun `folder migration advances schema from 10 to 11 with root defaults`() {
+        assertEquals(10, AppDatabase.MIGRATION_10_11.startVersion)
+        assertEquals(11, AppDatabase.MIGRATION_10_11.endVersion)
+        assertEquals(null, defaultPwa().folderId)
+        assertEquals(0, defaultPwa().folderOrder)
+    }
+
     private fun defaultPwa() = PwaEntity(
         name = "Example",
         url = "https://example.com",

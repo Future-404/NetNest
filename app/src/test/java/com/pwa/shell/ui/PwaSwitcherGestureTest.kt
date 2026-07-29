@@ -43,31 +43,29 @@ class PwaSwitcherGestureTest {
     }
 
     @Test
-    fun `position drag changes height and switches side after threshold`() {
+    fun `position drag changes height and snaps to nearest edge`() {
         val start = SwitcherPlacement(
             side = SwitcherSide.RIGHT,
             verticalRatio = 0.5f
         )
 
-        val preview = switcherPlacementAfterDrag(
+        val staysRight = switcherPlacementAfterFreeDrag(
             start = start,
-            deltaX = -80f,
+            deltaX = -400f,
             deltaY = -100f,
-            availableHeightPx = 1_000f,
-            horizontalThresholdPx = 48f,
-            applyHorizontalSide = false
+            availableWidthPx = 1_000f,
+            availableHeightPx = 1_000f
         )
-        val committed = switcherPlacementAfterDrag(
+        val snapsLeft = switcherPlacementAfterFreeDrag(
             start = start,
-            deltaX = -80f,
+            deltaX = -600f,
             deltaY = -100f,
+            availableWidthPx = 1_000f,
             availableHeightPx = 1_000f,
-            horizontalThresholdPx = 48f,
-            applyHorizontalSide = true
         )
 
-        assertEquals(0.4f, preview.verticalRatio)
-        assertEquals(SwitcherSide.RIGHT, preview.side)
-        assertEquals(SwitcherSide.LEFT, committed.side)
+        assertEquals(0.4f, staysRight.verticalRatio)
+        assertEquals(SwitcherSide.RIGHT, staysRight.side)
+        assertEquals(SwitcherSide.LEFT, snapsLeft.side)
     }
 }

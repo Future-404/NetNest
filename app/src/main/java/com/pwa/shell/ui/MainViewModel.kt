@@ -9,6 +9,7 @@ import com.pwa.shell.data.local.AppDatabase
 import com.pwa.shell.data.local.PendingWebProfileDeletionEntity
 import com.pwa.shell.data.local.PwaDao
 import com.pwa.shell.data.local.PwaEntity
+import com.pwa.shell.data.local.PwaFolderEntity
 import com.pwa.shell.data.remote.IconDownloader
 import com.pwa.shell.data.remote.PwaManifestFetcher
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,7 @@ class MainViewModel(context: Context) : ViewModel() {
     private val appContext = context.applicationContext
     val database = AppDatabase.getDatabase(appContext)
     private val pwaDao: PwaDao = database.pwaDao()
+    private val pwaFolderDao = database.pwaFolderDao()
     private val pendingProfileDeletionDao = database.pendingWebProfileDeletionDao()
     val userScriptDao = database.userScriptDao()
     val scriptStorageDao = database.scriptStorageDao()
@@ -31,6 +33,7 @@ class MainViewModel(context: Context) : ViewModel() {
     private val downloader = IconDownloader(client)
 
     val pwaList = pwaDao.getAllPwas()
+    val pwaFolderList = pwaFolderDao.getAllFolders()
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -114,7 +117,9 @@ class MainViewModel(context: Context) : ViewModel() {
             val safeUpdate = previous?.let {
                 pwa.copy(
                     webProfileId = it.webProfileId,
-                    usedSharedCompatibility = it.usedSharedCompatibility
+                    usedSharedCompatibility = it.usedSharedCompatibility,
+                    folderId = it.folderId,
+                    folderOrder = it.folderOrder
                 )
             } ?: pwa
             pwaDao.update(safeUpdate)
@@ -153,6 +158,7 @@ class MainViewModel(context: Context) : ViewModel() {
                     )
                 }
                 pwaDao.deleteById(pwa.id)
+                pwa.folderId?.let { cleanupSmallFolderAfterDeletion(it) }
             }
 
             runCatching { disablePinnedPwaShortcut(appContext, pwa.id) }
@@ -223,6 +229,223 @@ class MainViewModel(context: Context) : ViewModel() {
             }
             pwaDao.batchUpdateDisplayOrder(updated)
         }
+    }
+
+    fun reorderHomeItems(
+        entries: List<HomeOrderEntry>,
+        onResult: (Result<Unit>) -> Unit = {}
+    ) {
+        runHomeOrganizationMutation(onResult) {
+            database.withTransaction {
+                persistHomeOrder(entries)
+            }
+        }
+    }
+
+    fun createFolder(
+        firstPwaId: Long,
+        secondPwaId: Long,
+        name: String,
+        onResult: (Result<Unit>) -> Unit = {}
+    ) {
+        val folderName = normalizedFolderName(name)
+        if (folderName == null || firstPwaId == secondPwaId) {
+            onResult(Result.failure(IllegalArgumentException("请输入 1–30 个字符的文件夹名称")))
+            return
+        }
+        runHomeOrganizationMutation(onResult) {
+            database.withTransaction {
+                val pwas = pwaDao.getAllPwasOnce()
+                val folders = pwaFolderDao.getAllFoldersOnce()
+                val first = pwas.firstOrNull { it.id == firstPwaId && it.folderId == null }
+                    ?: error("第一个应用已不在首页")
+                val second = pwas.firstOrNull { it.id == secondPwaId && it.folderId == null }
+                    ?: error("第二个应用已不在首页")
+                val rootOrder = persistentHomeOrder(pwas, folders)
+                val firstIndex = rootOrder.indexOf(HomeOrderEntry.Pwa(first.id))
+                val secondIndex = rootOrder.indexOf(HomeOrderEntry.Pwa(second.id))
+                check(firstIndex >= 0 && secondIndex >= 0) { "无法确定应用的首页位置" }
+                val insertionIndex = minOf(firstIndex, secondIndex)
+                val folderId = pwaFolderDao.insert(
+                    PwaFolderEntity(
+                        name = folderName,
+                        displayOrder = insertionIndex,
+                        addedTime = System.currentTimeMillis()
+                    )
+                )
+                val orderedMembers = listOf(first, second).sortedBy {
+                    rootOrder.indexOf(HomeOrderEntry.Pwa(it.id))
+                }
+                orderedMembers.forEachIndexed { index, member ->
+                    pwaDao.updateFolder(member.id, folderId, index)
+                }
+                val updatedRoot = rootOrder
+                    .filterNot {
+                        it == HomeOrderEntry.Pwa(first.id) ||
+                            it == HomeOrderEntry.Pwa(second.id)
+                    }
+                    .toMutableList()
+                    .apply { add(insertionIndex, HomeOrderEntry.Folder(folderId)) }
+                persistHomeOrder(updatedRoot)
+            }
+        }
+    }
+
+    fun addPwaToFolder(
+        pwaId: Long,
+        folderId: Long,
+        onResult: (Result<Unit>) -> Unit = {}
+    ) {
+        runHomeOrganizationMutation(onResult) {
+            database.withTransaction {
+                val pwas = pwaDao.getAllPwasOnce()
+                val folders = pwaFolderDao.getAllFoldersOnce()
+                val pwa = pwas.firstOrNull { it.id == pwaId && it.folderId == null }
+                    ?: error("该应用已不在首页")
+                check(folders.any { it.id == folderId }) { "目标文件夹不存在" }
+                val nextOrder = pwas.count { it.folderId == folderId }
+                pwaDao.updateFolder(pwa.id, folderId, nextOrder)
+                persistHomeOrder(
+                    persistentHomeOrder(pwas, folders)
+                        .filterNot { it == HomeOrderEntry.Pwa(pwa.id) }
+                )
+            }
+        }
+    }
+
+    fun removePwaFromFolder(
+        pwaId: Long,
+        onResult: (Result<Unit>) -> Unit = {}
+    ) {
+        runHomeOrganizationMutation(onResult) {
+            database.withTransaction {
+                val pwas = pwaDao.getAllPwasOnce()
+                val folders = pwaFolderDao.getAllFoldersOnce()
+                val pwa = pwas.firstOrNull { it.id == pwaId }
+                    ?: error("应用不存在")
+                val folderId = pwa.folderId ?: error("该应用不在文件夹中")
+                val folder = folders.firstOrNull { it.id == folderId }
+                    ?: error("文件夹不存在")
+                val members = pwas
+                    .filter { it.folderId == folderId }
+                    .sortedWith(compareBy<PwaEntity> { it.folderOrder }.thenBy { it.addedTime })
+                if (members.size <= 2) {
+                    dissolveFolderInTransaction(folder, members, pwas, folders)
+                } else {
+                    pwaDao.updateFolder(pwa.id, null, 0)
+                    members.filterNot { it.id == pwa.id }.forEachIndexed { index, member ->
+                        pwaDao.updateFolder(member.id, folderId, index)
+                    }
+                    val rootOrder = persistentHomeOrder(pwas, folders).toMutableList()
+                    val folderIndex = rootOrder.indexOf(HomeOrderEntry.Folder(folderId))
+                    rootOrder.add(
+                        (folderIndex + 1).coerceIn(0, rootOrder.size),
+                        HomeOrderEntry.Pwa(pwa.id)
+                    )
+                    persistHomeOrder(rootOrder)
+                }
+            }
+        }
+    }
+
+    fun renameFolder(
+        folderId: Long,
+        name: String,
+        onResult: (Result<Unit>) -> Unit = {}
+    ) {
+        val folderName = normalizedFolderName(name)
+        if (folderName == null) {
+            onResult(Result.failure(IllegalArgumentException("请输入 1–30 个字符的文件夹名称")))
+            return
+        }
+        runHomeOrganizationMutation(onResult) {
+            pwaFolderDao.rename(folderId, folderName)
+        }
+    }
+
+    fun dissolveFolder(
+        folderId: Long,
+        onResult: (Result<Unit>) -> Unit = {}
+    ) {
+        runHomeOrganizationMutation(onResult) {
+            database.withTransaction {
+                val pwas = pwaDao.getAllPwasOnce()
+                val folders = pwaFolderDao.getAllFoldersOnce()
+                val folder = folders.firstOrNull { it.id == folderId }
+                    ?: error("文件夹不存在")
+                val members = pwas
+                    .filter { it.folderId == folderId }
+                    .sortedWith(compareBy<PwaEntity> { it.folderOrder }.thenBy { it.addedTime })
+                dissolveFolderInTransaction(folder, members, pwas, folders)
+            }
+        }
+    }
+
+    fun reorderFolderMembers(
+        folderId: Long,
+        memberIds: List<Long>,
+        onResult: (Result<Unit>) -> Unit = {}
+    ) {
+        runHomeOrganizationMutation(onResult) {
+            database.withTransaction {
+                val members = pwaDao.getPwasInFolderOnce(folderId)
+                check(members.map { it.id }.toSet() == memberIds.toSet()) {
+                    "文件夹内容已发生变化，请重试"
+                }
+                memberIds.forEachIndexed { index, memberId ->
+                    pwaDao.updateFolder(memberId, folderId, index)
+                }
+            }
+        }
+    }
+
+    private fun runHomeOrganizationMutation(
+        onResult: (Result<Unit>) -> Unit,
+        mutation: suspend () -> Unit
+    ) {
+        viewModelScope.launch {
+            onResult(runCatching { mutation() })
+        }
+    }
+
+    private suspend fun persistHomeOrder(entries: List<HomeOrderEntry>) {
+        entries.forEachIndexed { index, entry ->
+            when (entry) {
+                is HomeOrderEntry.Pwa -> pwaDao.updateDisplayOrder(entry.id, index)
+                is HomeOrderEntry.Folder ->
+                    pwaFolderDao.updateDisplayOrder(entry.id, index)
+            }
+        }
+    }
+
+    private suspend fun dissolveFolderInTransaction(
+        folder: PwaFolderEntity,
+        members: List<PwaEntity>,
+        pwas: List<PwaEntity>,
+        folders: List<PwaFolderEntity>
+    ) {
+        members.forEach { member -> pwaDao.updateFolder(member.id, null, 0) }
+        pwaFolderDao.delete(folder)
+        val rootOrder = persistentHomeOrder(pwas, folders).toMutableList()
+        val folderIndex = rootOrder.indexOf(HomeOrderEntry.Folder(folder.id))
+        if (folderIndex >= 0) {
+            rootOrder.removeAt(folderIndex)
+            rootOrder.addAll(
+                folderIndex,
+                members.map { HomeOrderEntry.Pwa(it.id) }
+            )
+        }
+        persistHomeOrder(rootOrder)
+    }
+
+    private suspend fun cleanupSmallFolderAfterDeletion(folderId: Long) {
+        val folder = pwaFolderDao.getAllFoldersOnce().firstOrNull { it.id == folderId }
+            ?: return
+        val members = pwaDao.getPwasInFolderOnce(folderId)
+        if (members.size > 1) return
+        val pwas = pwaDao.getAllPwasOnce()
+        val folders = pwaFolderDao.getAllFoldersOnce()
+        dissolveFolderInTransaction(folder, members, pwas, folders)
     }
 
     fun resetState() {

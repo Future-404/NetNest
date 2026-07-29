@@ -44,6 +44,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.pwa.shell.data.local.PwaEntity
+import com.pwa.shell.data.local.PwaFolderEntity
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -73,6 +74,7 @@ data class PwaExternalLaunch(
 fun PwaSessionHost(
     viewModel: MainViewModel,
     pwas: List<PwaEntity>,
+    folders: List<PwaFolderEntity>,
     externalLaunch: PwaExternalLaunch?,
     onExternalLaunchConsumed: () -> Unit,
     memoryPressureSignal: Long,
@@ -338,18 +340,21 @@ fun PwaSessionHost(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
+                    val rootItemCount = pwas.count { it.folderId == null } + folders.size
                     HomeScreen(
                         viewModel = viewModel,
+                        pwas = pwas,
+                        folders = folders,
                         settingsTileIndex = normalizeSettingsTileIndex(
                             globalSettingsPreferences.loadSettingsTileIndex(),
-                            pwas.size
+                            rootItemCount
                         ),
                         onSettingsTileIndexChanged = { index ->
                             globalSettingsPreferences.saveSettingsTileIndex(index)
                         },
                         addAppTileIndex = normalizeSystemTileIndex(
                             globalSettingsPreferences.loadAddAppTileIndex(),
-                            pwas.size
+                            rootItemCount
                         ),
                         onAddAppTileIndexChanged = { index ->
                             globalSettingsPreferences.saveAddAppTileIndex(index)

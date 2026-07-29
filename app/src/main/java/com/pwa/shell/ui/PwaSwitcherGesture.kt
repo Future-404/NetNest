@@ -41,18 +41,20 @@ fun isOutwardCloseGesture(
     }
 }
 
-internal fun switcherPlacementAfterDrag(
+internal fun switcherPlacementAfterFreeDrag(
     start: SwitcherPlacement,
     deltaX: Float,
     deltaY: Float,
-    availableHeightPx: Float,
-    horizontalThresholdPx: Float,
-    applyHorizontalSide: Boolean
+    availableWidthPx: Float,
+    availableHeightPx: Float
 ): SwitcherPlacement {
-    val side = if (applyHorizontalSide && abs(deltaX) >= horizontalThresholdPx) {
-        if (deltaX < 0f) SwitcherSide.LEFT else SwitcherSide.RIGHT
+    val safeWidth = availableWidthPx.coerceAtLeast(1f)
+    val startX = if (start.side == SwitcherSide.LEFT) 0f else safeWidth
+    val releasedX = (startX + deltaX).coerceIn(0f, safeWidth)
+    val side = if (releasedX < safeWidth / 2f) {
+        SwitcherSide.LEFT
     } else {
-        start.side
+        SwitcherSide.RIGHT
     }
     return start.copy(
         side = side,

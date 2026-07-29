@@ -2,6 +2,11 @@ package com.pwa.shell.ui
 
 import android.graphics.Rect
 import android.os.Build
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -45,6 +50,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -61,14 +67,41 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.pwa.shell.data.local.PwaEntity
 import java.io.File
 import kotlin.math.roundToInt
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
-import com.pwa.shell.ui.theme.glassmorphic
+import com.pwa.shell.ui.theme.glassmorphicOverlay
+
+private data class SwitcherSnapPreview(
+    val start: Offset,
+    val target: Offset,
+    val placement: SwitcherPlacement
+)
+
+private fun switcherPreviewCenter(
+    placement: SwitcherPlacement,
+    availableWidthPx: Float,
+    availableHeightPx: Float,
+    previewWidthPx: Float,
+    previewHeightPx: Float
+): Offset {
+    val normalized = placement.normalized()
+    val x = if (normalized.side == SwitcherSide.LEFT) {
+        previewWidthPx / 2f
+    } else {
+        availableWidthPx - previewWidthPx / 2f
+    }
+    val y = (availableHeightPx - previewHeightPx) * normalized.verticalRatio +
+        previewHeightPx / 2f
+    return Offset(x, y)
+}
 
 @Composable
 fun PwaSwitcherOverlay(
@@ -89,12 +122,45 @@ fun PwaSwitcherOverlay(
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier) {
-        val availableHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
+        val density = LocalDensity.current
+        val availableWidthPx = with(density) { maxWidth.toPx() }
+        val availableHeightPx = with(density) { maxHeight.toPx() }
+        val previewWidthPx = with(density) { 12.dp.toPx() }
+        val previewHeightPx = with(density) { 58.dp.toPx() }
+        var dragPreviewStart by remember { mutableStateOf<Offset?>(null) }
+        var dragPreviewPosition by remember { mutableStateOf<Offset?>(null) }
+        var snapPreview by remember { mutableStateOf<SwitcherSnapPreview?>(null) }
+        val repositioning = dragPreviewPosition != null || snapPreview != null
+        val drawerAlpha by animateFloatAsState(
+            targetValue = if (repositioning) 0.58f else 1f,
+            animationSpec = tween(durationMillis = 140),
+            label = "switcherDrawerRepositionAlpha"
+        )
+        val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+
+        androidx.compose.runtime.LaunchedEffect(drawerOpen) {
+            if (!drawerOpen) {
+                dragPreviewStart = null
+                dragPreviewPosition = null
+                snapPreview = null
+            }
+        }
+
+        fun previewCenter(target: SwitcherPlacement): Offset {
+            return switcherPreviewCenter(
+                placement = target,
+                availableWidthPx = availableWidthPx,
+                availableHeightPx = availableHeightPx,
+                previewWidthPx = previewWidthPx,
+                previewHeightPx = previewHeightPx
+            )
+        }
+
         if (drawerOpen) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.35f))
+                    .background(Color.Black.copy(alpha = if (isDark) 0.48f else 0.32f))
                     .clickable { onDrawerOpenChange(false) }
             )
             SwitcherDrawer(
@@ -102,35 +168,93 @@ fun PwaSwitcherOverlay(
                 pwas = drawerPwas,
                 livePwaIds = livePwaIds,
                 attentionPwaIds = attentionPwaIds,
-                availableHeightPx = availableHeightPx,
+                availableWidthPx = availableWidthPx,
+                availableHeightPx = (availableHeightPx - previewHeightPx).coerceAtLeast(1f),
                 onPlacementChange = onPlacementChange,
                 onPlacementChangeFinished = onPlacementChangeFinished,
+                onPositionDragStart = {
+                    val start = previewCenter(placement)
+                    snapPreview = null
+                    dragPreviewStart = start
+                    dragPreviewPosition = start
+                },
+                onPositionDrag = { totalDrag ->
+                    val start = dragPreviewStart ?: previewCenter(placement)
+                    dragPreviewPosition = Offset(
+                        x = (start.x + totalDrag.x).coerceIn(
+                            previewWidthPx / 2f,
+                            availableWidthPx - previewWidthPx / 2f
+                        ),
+                        y = (start.y + totalDrag.y).coerceIn(
+                            previewHeightPx / 2f,
+                            availableHeightPx - previewHeightPx / 2f
+                        )
+                    )
+                },
+                onPositionDragEnd = { finalPlacement ->
+                    val start = dragPreviewPosition ?: previewCenter(placement)
+                    dragPreviewStart = null
+                    dragPreviewPosition = null
+                    snapPreview = SwitcherSnapPreview(
+                        start = start,
+                        target = previewCenter(finalPlacement),
+                        placement = finalPlacement
+                    )
+                },
+                onPositionDragCancel = {
+                    dragPreviewStart = null
+                    dragPreviewPosition = null
+                    snapPreview = null
+                },
                 onPwaSelected = onPwaSelected,
                 onHomeSelected = onHomeSelected,
                 onCloseWarmPwa = onCloseWarmPwa,
-                modifier = Modifier.align(
-                    if (placement.side == SwitcherSide.LEFT) {
-                        Alignment.CenterStart
-                    } else {
-                        Alignment.CenterEnd
-                    }
-                )
-            )
-            val previewHeight = 72.dp
-            val previewOffset = (maxHeight - previewHeight) * placement.verticalRatio
-            SwitcherPositionPreview(
-                side = placement.side,
-                opacity = placement.handleOpacity,
                 modifier = Modifier
                     .align(
                         if (placement.side == SwitcherSide.LEFT) {
-                            Alignment.TopStart
+                            Alignment.CenterStart
                         } else {
-                            Alignment.TopEnd
+                            Alignment.CenterEnd
                         }
                     )
-                    .offset(y = previewOffset)
+                    .graphicsLayer { alpha = drawerAlpha }
             )
+            if (!repositioning) {
+                val previewHeight = 72.dp
+                val previewOffset = (maxHeight - previewHeight) * placement.verticalRatio
+                SwitcherPositionPreview(
+                    side = placement.side,
+                    opacity = placement.handleOpacity,
+                    modifier = Modifier
+                        .align(
+                            if (placement.side == SwitcherSide.LEFT) {
+                                Alignment.TopStart
+                            } else {
+                                Alignment.TopEnd
+                            }
+                        )
+                        .offset(y = previewOffset)
+                )
+            }
+            dragPreviewPosition?.let { position ->
+                FloatingSwitcherPositionPreview(
+                    position = position,
+                    opacity = maxOf(placement.handleOpacity, 0.72f)
+                )
+            }
+            snapPreview?.let { preview ->
+                SnappingSwitcherPositionPreview(
+                    preview = preview,
+                    opacity = maxOf(placement.handleOpacity, 0.72f),
+                    onFinished = {
+                        if (snapPreview == preview) {
+                            onPlacementChange(preview.placement)
+                            onPlacementChangeFinished(preview.placement)
+                            snapPreview = null
+                        }
+                    }
+                )
+            }
         } else {
             val handleHeight = 72.dp
             val yOffset = (maxHeight - handleHeight) * placement.verticalRatio
@@ -293,9 +417,14 @@ private fun SwitcherDrawer(
     pwas: List<PwaEntity>,
     livePwaIds: Set<Long>,
     attentionPwaIds: Set<Long>,
+    availableWidthPx: Float,
     availableHeightPx: Float,
     onPlacementChange: (SwitcherPlacement) -> Unit,
     onPlacementChangeFinished: (SwitcherPlacement) -> Unit,
+    onPositionDragStart: () -> Unit,
+    onPositionDrag: (Offset) -> Unit,
+    onPositionDragEnd: (SwitcherPlacement) -> Unit,
+    onPositionDragCancel: () -> Unit,
     onPwaSelected: (PwaEntity) -> Unit,
     onHomeSelected: () -> Unit,
     onCloseWarmPwa: (PwaEntity) -> Unit,
@@ -307,7 +436,7 @@ private fun SwitcherDrawer(
         modifier = modifier
             .width(120.dp)
             .padding(vertical = 12.dp)
-            .glassmorphic(
+            .glassmorphicOverlay(
                 shape = if (placement.side == SwitcherSide.LEFT) {
                     RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
                 } else {
@@ -323,9 +452,14 @@ private fun SwitcherDrawer(
         ) {
             SwitcherPositionDragControl(
                 placement = placement,
+                availableWidthPx = availableWidthPx,
                 availableHeightPx = availableHeightPx,
                 onPlacementChange = onPlacementChange,
-                onPlacementChangeFinished = onPlacementChangeFinished
+                onPlacementChangeFinished = onPlacementChangeFinished,
+                onDragStart = onPositionDragStart,
+                onDrag = onPositionDrag,
+                onDragEnd = onPositionDragEnd,
+                onDragCancel = onPositionDragCancel
             )
             Text(
                 text = "透明度 ${(placement.handleOpacity * 100).roundToInt()}%",
@@ -385,16 +519,23 @@ private fun SwitcherDrawer(
 @Composable
 private fun SwitcherPositionDragControl(
     placement: SwitcherPlacement,
+    availableWidthPx: Float,
     availableHeightPx: Float,
     onPlacementChange: (SwitcherPlacement) -> Unit,
-    onPlacementChangeFinished: (SwitcherPlacement) -> Unit
+    onPlacementChangeFinished: (SwitcherPlacement) -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: (SwitcherPlacement) -> Unit,
+    onDragCancel: () -> Unit
 ) {
-    val density = LocalDensity.current
     val haptics = LocalHapticFeedback.current
     val latestPlacement by rememberUpdatedState(placement)
     val latestOnPlacementChange by rememberUpdatedState(onPlacementChange)
     val latestOnPlacementChangeFinished by rememberUpdatedState(onPlacementChangeFinished)
-    val horizontalThresholdPx = with(density) { 48.dp.toPx() }
+    val latestOnDragStart by rememberUpdatedState(onDragStart)
+    val latestOnDrag by rememberUpdatedState(onDrag)
+    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
+    val latestOnDragCancel by rememberUpdatedState(onDragCancel)
 
     fun commit(updated: SwitcherPlacement) {
         val normalized = updated.normalized()
@@ -435,7 +576,7 @@ private fun SwitcherPositionDragControl(
                     }
                 )
             }
-            .pointerInput(availableHeightPx) {
+            .pointerInput(availableWidthPx, availableHeightPx) {
                 var startPlacement = placement
                 var totalDrag = Offset.Zero
                 detectDragGestures(
@@ -443,35 +584,26 @@ private fun SwitcherPositionDragControl(
                         startPlacement = latestPlacement
                         totalDrag = Offset.Zero
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        latestOnDragStart()
                     },
                     onDrag = { change, dragAmount ->
                         totalDrag += dragAmount
-                        val draftPlacement = switcherPlacementAfterDrag(
-                            start = startPlacement,
-                            deltaX = totalDrag.x,
-                            deltaY = totalDrag.y,
-                            availableHeightPx = availableHeightPx,
-                            horizontalThresholdPx = horizontalThresholdPx,
-                            applyHorizontalSide = false
-                        )
-                        latestOnPlacementChange(draftPlacement)
+                        latestOnDrag(totalDrag)
                         change.consume()
                     },
                     onDragEnd = {
-                        val finalPlacement = switcherPlacementAfterDrag(
+                        val finalPlacement = switcherPlacementAfterFreeDrag(
                             start = startPlacement,
                             deltaX = totalDrag.x,
                             deltaY = totalDrag.y,
-                            availableHeightPx = availableHeightPx,
-                            horizontalThresholdPx = horizontalThresholdPx,
-                            applyHorizontalSide = true
+                            availableWidthPx = availableWidthPx,
+                            availableHeightPx = availableHeightPx
                         )
-                        latestOnPlacementChange(finalPlacement)
-                        latestOnPlacementChangeFinished(finalPlacement)
+                        latestOnDragEnd(finalPlacement)
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     },
                     onDragCancel = {
-                        latestOnPlacementChange(startPlacement)
+                        latestOnDragCancel()
                     }
                 )
             },
@@ -509,6 +641,72 @@ private fun SwitcherPositionDragControl(
             )
         }
     }
+}
+
+@Composable
+private fun FloatingSwitcherPositionPreview(
+    position: Offset,
+    opacity: Float
+) {
+    val density = LocalDensity.current
+    val halfWidthPx = with(density) { 6.dp.toPx() }
+    val halfHeightPx = with(density) { 29.dp.toPx() }
+
+    Surface(
+        modifier = Modifier
+            .offset {
+                IntOffset(
+                    x = (position.x - halfWidthPx).roundToInt(),
+                    y = (position.y - halfHeightPx).roundToInt()
+                )
+            }
+            .width(12.dp)
+            .height(58.dp)
+            .alpha(opacity),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.primary,
+        shadowElevation = 10.dp
+    ) {}
+}
+
+@Composable
+private fun SnappingSwitcherPositionPreview(
+    preview: SwitcherSnapPreview,
+    opacity: Float,
+    onFinished: () -> Unit
+) {
+    val x = remember(preview) { Animatable(preview.start.x) }
+    val y = remember(preview) { Animatable(preview.start.y) }
+    val latestOnFinished by rememberUpdatedState(onFinished)
+
+    androidx.compose.runtime.LaunchedEffect(preview) {
+        coroutineScope {
+            launch {
+                x.animateTo(
+                    targetValue = preview.target.x,
+                    animationSpec = spring(
+                        dampingRatio = 0.82f,
+                        stiffness = Spring.StiffnessMedium
+                    )
+                )
+            }
+            launch {
+                y.animateTo(
+                    targetValue = preview.target.y,
+                    animationSpec = spring(
+                        dampingRatio = 0.82f,
+                        stiffness = Spring.StiffnessMedium
+                    )
+                )
+            }
+        }
+        latestOnFinished()
+    }
+
+    FloatingSwitcherPositionPreview(
+        position = Offset(x.value, y.value),
+        opacity = opacity
+    )
 }
 
 @Composable

@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import com.pwa.shell.data.local.PwaEntity
+import com.pwa.shell.data.local.PwaFolderEntity
 import com.pwa.shell.data.remote.AppUpdateChecker
 import com.pwa.shell.data.remote.AppUpdateInfo
 import com.pwa.shell.ui.MainViewModel
@@ -83,6 +84,12 @@ class MainActivity : ComponentActivity() {
                     ) {
                         viewModel.pwaList.collect { value = it }
                     }
+                    val folders by produceState<List<PwaFolderEntity>?>(
+                        initialValue = null,
+                        key1 = viewModel
+                    ) {
+                        viewModel.pwaFolderList.collect { value = it }
+                    }
                     val launchTarget by pwaLaunchTargets.collectAsState()
                     val memoryPressureSignal by memoryPressureSignals.collectAsState()
 
@@ -90,10 +97,12 @@ class MainActivity : ComponentActivity() {
                         availableUpdate = updateChecker.check(currentAppVersion)
                     }
 
-                    pwas?.let { loadedPwas ->
+                    if (pwas != null && folders != null) {
+                        val loadedPwas = pwas.orEmpty()
                         PwaSessionHost(
                             viewModel = viewModel,
                             pwas = loadedPwas,
+                            folders = folders.orEmpty(),
                             externalLaunch = launchTarget?.let { target ->
                                 PwaExternalLaunch(
                                     pwaId = target.pwaId,
