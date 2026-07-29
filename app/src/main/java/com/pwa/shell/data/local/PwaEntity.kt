@@ -24,5 +24,15 @@ data class PwaEntity(
     val customPlatform: String = "",
     val screenWidth: Int = 0,
     val screenHeight: Int = 0,
-    val deviceScaleFactor: Float = 0f
+    val deviceScaleFactor: Float = 0f,
+    /**
+     * Null is reserved for PWAs created before per-PWA WebView profiles existed.
+     * New PWAs receive an opaque profile name and must never share it.
+     */
+    val webProfileId: String? = null,
+    /**
+     * Records that this isolated PWA has previously used the shared compatibility
+     * profile because the installed WebView provider did not support multi-profile.
+     */
+    val usedSharedCompatibility: Boolean = false
 )

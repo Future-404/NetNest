@@ -115,6 +115,9 @@ fun PwaWebViewScreen(
     pwa: PwaEntity,
     onBackToHome: () -> Unit,
     onUpdatePwa: (PwaEntity) -> Unit = {},
+    onCompatibilityFallbackUsed: (Long) -> Unit = {},
+    onIsolationActivationAcknowledged: (Long) -> Unit = {},
+    onWebViewDisposed: () -> Unit = {},
     notificationClickId: String? = null,
     onNotificationClickConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -123,6 +126,11 @@ fun PwaWebViewScreen(
     val view = LocalView.current
     val darkTheme = isSystemInDarkTheme()
     var webView: WebView? by remember { mutableStateOf(null) }
+    var profileCookieManager: CookieManager? by remember { mutableStateOf(null) }
+    var activeWebProfile by remember(pwa.id, pwa.webProfileId) {
+        mutableStateOf(PwaWebProfileManager.resolve(pwa.webProfileId))
+    }
+    var showIsolationActivatedNotice by remember(pwa.id) { mutableStateOf(false) }
     var showSecurityDialog by remember { mutableStateOf(false) }
     var blockedUrl by remember { mutableStateOf("") }
     var blockedLeakType by remember { mutableStateOf("") }
@@ -166,6 +174,26 @@ fun PwaWebViewScreen(
         )
     }
     LaunchedEffect(pwa) { securityPolicyStore.update(pwa) }
+    LaunchedEffect(
+        activeWebProfile.mode,
+        pwa.id,
+        pwa.usedSharedCompatibility
+    ) {
+        when (activeWebProfile.mode) {
+            PwaWebProfileMode.COMPATIBILITY_SHARED -> {
+                showIsolationActivatedNotice = false
+                if (!pwa.usedSharedCompatibility) {
+                    onCompatibilityFallbackUsed(pwa.id)
+                }
+            }
+            PwaWebProfileMode.ISOLATED -> {
+                if (pwa.usedSharedCompatibility) {
+                    showIsolationActivatedNotice = true
+                }
+            }
+            PwaWebProfileMode.LEGACY_SHARED -> Unit
+        }
+    }
 
     fun dispatchNotificationClick(targetWebView: WebView) {
         val notificationId = pendingNotificationClickId ?: return
@@ -432,7 +460,7 @@ fun PwaWebViewScreen(
         }
 
         onDispose {
-            CookieManager.getInstance().flush()
+            profileCookieManager?.flush()
             pendingWebPermissionRequest?.deny()
             pendingWebPermissionRequest = null
             pendingNotificationPermission?.let {
@@ -469,6 +497,8 @@ fun PwaWebViewScreen(
                 destroy()
             }
             webView = null
+            profileCookieManager = null
+            onWebViewDisposed()
             window?.let { w ->
                 // Restore default transparent system bars
                 w.statusBarColor = android.graphics.Color.TRANSPARENT
@@ -496,6 +526,11 @@ fun PwaWebViewScreen(
         AndroidView(
             factory = { ctx ->
                 WebView(ctx).apply {
+                    val attachedProfile = PwaWebProfileManager.attach(this, pwa.webProfileId)
+                    activeWebProfile = attachedProfile
+                    val cookieManager = PwaWebProfileManager.cookieManager(this, attachedProfile)
+                    profileCookieManager = cookieManager
+
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -506,8 +541,8 @@ fun PwaWebViewScreen(
                     )
 
                     // Keep first-party sessions while preventing cross-site cookie tracking.
-                    CookieManager.getInstance().setAcceptCookie(true)
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
+                    cookieManager.setAcceptCookie(true)
+                    cookieManager.setAcceptThirdPartyCookies(this, false)
 
                     // Add Security Sandbox Javascript Interface Bridge
                     addJavascriptInterface(
@@ -598,7 +633,7 @@ fun PwaWebViewScreen(
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
                             // Flush cookies immediately to ensure persistence
-                            CookieManager.getInstance().flush()
+                            cookieManager.flush()
 
                             if (view != null) {
                                 injectSecuritySandbox(view, pwa, bridgeCapabilityToken)
@@ -702,6 +737,16 @@ fun PwaWebViewScreen(
                             val mainWebView = view ?: return false
                             val context = mainWebView.context
                             val tempWebView = WebView(context)
+                            val tempProfile = PwaWebProfileManager.attach(
+                                tempWebView,
+                                pwa.webProfileId
+                            )
+                            val tempCookieManager = PwaWebProfileManager.cookieManager(
+                                tempWebView,
+                                tempProfile
+                            )
+                            tempCookieManager.setAcceptCookie(true)
+                            tempCookieManager.setAcceptThirdPartyCookies(tempWebView, false)
                             
                             // Configure settings to match main WebView
                             configureSettings(tempWebView, pwa)
@@ -713,7 +758,8 @@ fun PwaWebViewScreen(
                                     contentDisposition = contentDisposition,
                                     mimeType = mimeType,
                                     contentLength = contentLength,
-                                    referer = tempWebView.url
+                                    referer = tempWebView.url,
+                                    cookieHeader = tempCookieManager.getCookie(url)
                                 )
                                 if (request?.kind == BrowserDownloadKind.NETWORK) {
                                     queueDownload(request)
@@ -861,7 +907,8 @@ fun PwaWebViewScreen(
                             contentDisposition = contentDisposition,
                             mimeType = mimeType,
                             contentLength = contentLength,
-                            referer = this.url
+                            referer = this.url,
+                            cookieHeader = cookieManager.getCookie(url)
                         )
                         if (request == null) {
                             Toast.makeText(
@@ -884,6 +931,59 @@ fun PwaWebViewScreen(
                 Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)
             }
         )
+
+        if (activeWebProfile.mode == PwaWebProfileMode.COMPATIBILITY_SHARED) {
+            androidx.compose.material3.Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .then(
+                        if (pwa.useFullscreen) Modifier
+                        else Modifier.windowInsetsPadding(WindowInsets.statusBars)
+                    )
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                tonalElevation = 4.dp
+            ) {
+                Text(
+                    text = "当前系统 WebView 不支持独立数据，正在使用共享兼容模式。建议更新 Android System WebView。",
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+
+        if (
+            showIsolationActivatedNotice &&
+            !showSecurityDialog &&
+            downloadQueue.isEmpty() &&
+            pendingNotificationPermission == null
+        ) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = {
+                    showIsolationActivatedNotice = false
+                    onIsolationActivationAcknowledged(pwa.id)
+                },
+                title = { Text("已启用独立数据空间") },
+                text = {
+                    Text(
+                        "系统 WebView 现已支持数据隔离。该 PWA 已切换到自己的 Cookie 和本地存储，之前在共享兼容模式中的登录状态不会复制，可能需要重新登录。"
+                    )
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            showIsolationActivatedNotice = false
+                            onIsolationActivationAcknowledged(pwa.id)
+                        }
+                    ) {
+                        Text("知道了")
+                    }
+                }
+            )
+        }
 
         downloadQueue.firstOrNull()?.takeIf { !showSecurityDialog }?.let { request ->
             fun dismissDownload() {

@@ -11,7 +11,6 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Base64
-import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.URLUtil
 import java.io.File
@@ -35,7 +34,8 @@ internal data class BrowserDownloadRequest(
     val contentDisposition: String?,
     val referer: String?,
     val kind: BrowserDownloadKind,
-    val isJavascriptHandle: Boolean = false
+    val isJavascriptHandle: Boolean = false,
+    val cookieHeader: String? = null
 )
 
 internal fun classifyDownloadKind(url: String): BrowserDownloadKind? {
@@ -54,7 +54,8 @@ internal fun createBrowserDownloadRequest(
     contentDisposition: String?,
     mimeType: String?,
     contentLength: Long,
-    referer: String?
+    referer: String?,
+    cookieHeader: String? = null
 ): BrowserDownloadRequest? {
     val kind = classifyDownloadKind(url) ?: return null
     val normalizedMime = normalizeMimeType(mimeType)
@@ -67,7 +68,8 @@ internal fun createBrowserDownloadRequest(
         userAgent = sanitizeHeaderValue(userAgent.orEmpty()),
         contentDisposition = contentDisposition,
         referer = sanitizeHeaderValue(referer.orEmpty()).takeIf { it.isNotEmpty() },
-        kind = kind
+        kind = kind,
+        cookieHeader = sanitizeHeaderValue(cookieHeader.orEmpty()).takeIf { it.isNotEmpty() }
     )
 }
 
@@ -123,10 +125,7 @@ internal fun enqueueNetworkDownload(context: Context, request: BrowserDownloadRe
         downloadRequest.addRequestHeader("User-Agent", request.userAgent)
     }
     request.referer?.let { downloadRequest.addRequestHeader("Referer", it) }
-    CookieManager.getInstance().getCookie(request.url)
-        ?.let(::sanitizeHeaderValue)
-        ?.takeIf { it.isNotEmpty() }
-        ?.let { downloadRequest.addRequestHeader("Cookie", it) }
+    request.cookieHeader?.let { downloadRequest.addRequestHeader("Cookie", it) }
 
     val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     return manager.enqueue(downloadRequest)
@@ -508,7 +507,7 @@ private fun normalizeMimeType(mimeType: String?): String {
         ?: "application/octet-stream"
 }
 
-private fun sanitizeHeaderValue(value: String): String {
+internal fun sanitizeHeaderValue(value: String): String {
     return value.replace("\r", "").replace("\n", "").trim()
 }
 

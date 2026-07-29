@@ -10,8 +10,13 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [PwaEntity::class, UserScriptEntity::class, ScriptStorageEntity::class],
-    version = 8,
+    entities = [
+        PwaEntity::class,
+        UserScriptEntity::class,
+        ScriptStorageEntity::class,
+        PendingWebProfileDeletionEntity::class
+    ],
+    version = 9,
     exportSchema = false
 )
 @TypeConverters(StringListConverter::class)
@@ -20,6 +25,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun pwaDao(): PwaDao
     abstract fun userScriptDao(): UserScriptDao
     abstract fun scriptStorageDao(): ScriptStorageDao
+    abstract fun pendingWebProfileDeletionDao(): PendingWebProfileDeletionDao
 
     companion object {
         @Volatile
@@ -50,6 +56,48 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE `pwas` ADD COLUMN `securityPromptEnabled` INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `pwas` ADD COLUMN `webProfileId` TEXT")
+                db.execSQL(
+                    "ALTER TABLE `pwas` ADD COLUMN `usedSharedCompatibility` INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `pending_web_profile_deletions` (
+                        `profileName` TEXT NOT NULL,
+                        `requestedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`profileName`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE `script_storage_v9` (
+                        `pwaId` INTEGER NOT NULL,
+                        `storageKey` TEXT NOT NULL,
+                        `storageValue` TEXT NOT NULL,
+                        PRIMARY KEY(`pwaId`, `storageKey`),
+                        FOREIGN KEY(`pwaId`) REFERENCES `pwas`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `script_storage_v9` (`pwaId`, `storageKey`, `storageValue`)
+                    SELECT `pwaId`, `storageKey`, `storageValue`
+                    FROM `script_storage`
+                    WHERE `pwaId` IN (SELECT `id` FROM `pwas`)
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `script_storage`")
+                db.execSQL("ALTER TABLE `script_storage_v9` RENAME TO `script_storage`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_script_storage_pwaId` ON `script_storage` (`pwaId`)"
+                )
             }
         }
 
@@ -144,7 +192,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_4_6,
                     MIGRATION_5_6,
                     MIGRATION_6_7,
-                    MIGRATION_7_8
+                    MIGRATION_7_8,
+                    MIGRATION_8_9
                 )
                 .build()
                 INSTANCE = instance

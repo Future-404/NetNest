@@ -415,10 +415,18 @@ fun HomeScreen(
 
             // Delete Confirmation Dialog
             showDeleteConfirmDialog?.let { pwa ->
+                val deletionMessage = when {
+                    pwa.webProfileId == null ->
+                        "您将删除网页应用“${pwa.name}”。这是旧版共享数据应用；为避免影响其他 PWA，共享 Cookie 和网页存储不会随单个应用删除。图标、脚本、通知和应用配置会被清理。"
+                    pwa.usedSharedCompatibility ->
+                        "您将删除网页应用“${pwa.name}”及其独立数据空间。此前共享兼容模式中产生的数据无法安全归属，将保留在旧共享空间中；其他独立 PWA 不受影响。"
+                    else ->
+                        "您将删除网页应用“${pwa.name}”及其完整独立数据空间，包括 Cookie、本地存储、脚本、通知和图标。其他 PWA 不受影响。"
+                }
                 AlertDialog(
                     onDismissRequest = { showDeleteConfirmDialog = null },
                     title = { Text("确认删除网页应用？") },
-                    text = { Text("您将删除网页应用 \"${pwa.name}\"。这将会清理该网站的本地存储数据（LocalStorage, Cookies 等）和图标缓存。此操作无法撤销。") },
+                    text = { Text("$deletionMessage\n\n此操作无法撤销。") },
                     confirmButton = {
                         TextButton(
                             onClick = {
@@ -1074,6 +1082,39 @@ fun EditPwaDialog(
                             title = "基础信息",
                             description = "应用名称、地址和显示方式"
                         ) {
+                            Surface(
+                                color = if (pwa.webProfileId == null) {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                },
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = if (pwa.webProfileId == null) {
+                                            "数据空间：旧版共享"
+                                        } else {
+                                            "数据空间：独立配置"
+                                        },
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                    Text(
+                                        text = if (pwa.webProfileId == null) {
+                                            "为保留升级前的登录状态，该应用继续使用共享网页数据。"
+                                        } else {
+                                            "支持时 Cookie 和网页本地数据与其他 PWA 隔离；不支持时会显示兼容提示。"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,

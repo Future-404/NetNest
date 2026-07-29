@@ -128,6 +128,15 @@ class MainActivity : ComponentActivity() {
                                     onUpdatePwa = { updatedPwa ->
                                         viewModel.updatePwa(updatedPwa)
                                     },
+                                    onCompatibilityFallbackUsed = { pwaId ->
+                                        viewModel.setUsedSharedCompatibility(pwaId, true)
+                                    },
+                                    onIsolationActivationAcknowledged = { pwaId ->
+                                        viewModel.setUsedSharedCompatibility(pwaId, false)
+                                    },
+                                    onWebViewDisposed = {
+                                        viewModel.retryPendingWebProfileDeletions()
+                                    },
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }

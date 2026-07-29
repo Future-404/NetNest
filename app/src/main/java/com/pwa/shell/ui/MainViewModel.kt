@@ -1,13 +1,12 @@
 package com.pwa.shell.ui
 
 import android.content.Context
-import android.net.Uri
 import android.util.Log
-import android.webkit.CookieManager
-import android.webkit.WebStorage
+import androidx.room.withTransaction
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pwa.shell.data.local.AppDatabase
+import com.pwa.shell.data.local.PendingWebProfileDeletionEntity
 import com.pwa.shell.data.local.PwaDao
 import com.pwa.shell.data.local.PwaEntity
 import com.pwa.shell.data.remote.IconDownloader
@@ -15,6 +14,7 @@ import com.pwa.shell.data.remote.PwaManifestFetcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 
@@ -23,6 +23,7 @@ class MainViewModel(context: Context) : ViewModel() {
     private val appContext = context.applicationContext
     val database = AppDatabase.getDatabase(appContext)
     private val pwaDao: PwaDao = database.pwaDao()
+    private val pendingProfileDeletionDao = database.pendingWebProfileDeletionDao()
     val userScriptDao = database.userScriptDao()
     val scriptStorageDao = database.scriptStorageDao()
     private val client = OkHttpClient()
@@ -33,6 +34,12 @@ class MainViewModel(context: Context) : ViewModel() {
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+    private var profileDeletionRetryJob: Job? = null
+    private var profileDeletionRetryRequested = false
+
+    init {
+        retryPendingWebProfileDeletions()
+    }
 
     fun addPwa(url: String, context: Context) {
         viewModelScope.launch {
@@ -47,7 +54,8 @@ class MainViewModel(context: Context) : ViewModel() {
                     iconPath = localIconPath,
                     themeColor = result.themeColor,
                     displayOrder = 0,
-                    addedTime = System.currentTimeMillis()
+                    addedTime = System.currentTimeMillis(),
+                    webProfileId = newPwaWebProfileId()
                 )
                 pwaDao.insert(pwaEntity)
                 _uiState.value = UiState.Success("PWA 添加成功")
@@ -73,7 +81,8 @@ class MainViewModel(context: Context) : ViewModel() {
                 useDevConsole = useDevConsole,
                 useFullscreen = useFullscreen,
                 securityMode = securityMode,
-                trustedDomains = trustedDomains
+                trustedDomains = trustedDomains,
+                webProfileId = newPwaWebProfileId()
             )
             pwaDao.insert(pwaEntity)
             _uiState.value = UiState.Success("PWA 手动添加成功")
@@ -83,18 +92,31 @@ class MainViewModel(context: Context) : ViewModel() {
     fun updatePwa(pwa: PwaEntity) {
         viewModelScope.launch {
             val previous = pwaDao.getAllPwasOnce().firstOrNull { it.id == pwa.id }
-            pwaDao.update(pwa)
+            // Profile identity and compatibility history are lifecycle-owned fields.
+            // UI/security updates may carry an older PwaEntity snapshot and must not
+            // overwrite them or move a PWA back into the shared profile.
+            val safeUpdate = previous?.let {
+                pwa.copy(
+                    webProfileId = it.webProfileId,
+                    usedSharedCompatibility = it.usedSharedCompatibility
+                )
+            } ?: pwa
+            pwaDao.update(safeUpdate)
             if (
                 previous != null &&
-                (previous.name != pwa.name || previous.iconPath != pwa.iconPath)
+                (previous.name != safeUpdate.name || previous.iconPath != safeUpdate.iconPath)
             ) {
-                runCatching { updatePinnedPwaShortcut(appContext, pwa) }
+                runCatching { updatePinnedPwaShortcut(appContext, safeUpdate) }
                     .onFailure {
-                        Log.e("MainViewModel", "Failed to update shortcut for PWA ${pwa.id}", it)
+                        Log.e(
+                            "MainViewModel",
+                            "Failed to update shortcut for PWA ${safeUpdate.id}",
+                            it
+                        )
                     }
             }
             previous?.iconPath
-                ?.takeIf { it != pwa.iconPath }
+                ?.takeIf { it != safeUpdate.iconPath }
                 ?.let { deleteIconIfUnreferenced(it) }
         }
     }
@@ -108,52 +130,15 @@ class MainViewModel(context: Context) : ViewModel() {
 
     fun deletePwa(pwa: PwaEntity) {
         viewModelScope.launch {
-            // WebView cookies/storage are process-global. Only clear them when no other
-            // configured PWA could be using the same host or a parent/child subdomain.
-            try {
-                val uri = Uri.parse(pwa.url)
-                val scheme = uri.scheme ?: "https"
-                val host = uri.host ?: ""
-                if (host.isNotEmpty()) {
-                    val hasRelatedPwa = pwaDao.getAllPwasOnce()
-                        .filter { it.id != pwa.id }
-                        .any { hostsShareCookieScope(host, Uri.parse(it.url).host.orEmpty()) }
-                    if (hasRelatedPwa) {
-                        Log.i("MainViewModel", "Skipping WebView cleanup for ${pwa.url}; another PWA shares cookie scope")
-                    } else {
-                    val port = uri.port
-                    val origin = if (port != -1) {
-                        "$scheme://$host:$port"
-                    } else {
-                        "$scheme://$host"
-                    }
-
-                    // Delete storage for the configured origin. We intentionally avoid global
-                    // removeAllCookies()/deleteAllData() because they would affect unrelated PWAs.
-                    WebStorage.getInstance().deleteOrigin(origin)
-
-                    // Expire cookies visible to this exact URL. WebView does not expose cookie
-                    // paths/domains, so unknown redirect/third-party cookies are left intact.
-                    val cookieManager = CookieManager.getInstance()
-                    val cookieString = cookieManager.getCookie(pwa.url)
-                    if (!cookieString.isNullOrEmpty()) {
-                        cookieString.split(";").forEach { cookie ->
-                            val parts = cookie.split("=")
-                            if (parts.isNotEmpty()) {
-                                val name = parts[0].trim()
-                                // Clear cookie by setting it with an expired date
-                                cookieManager.setCookie(pwa.url, "$name=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/")
-                            }
-                        }
-                        cookieManager.flush()
-                    }
-                    }
+            database.withTransaction {
+                pwa.webProfileId?.let { profileName ->
+                    pendingProfileDeletionDao.upsert(
+                        PendingWebProfileDeletionEntity(profileName)
+                    )
                 }
-            } catch (e: java.lang.Exception) {
-                Log.e("MainViewModel", "Failed to clean WebView cache for ${pwa.url}", e)
+                pwaDao.delete(pwa)
             }
 
-            pwaDao.delete(pwa)
             runCatching { disablePinnedPwaShortcut(appContext, pwa.id) }
                 .onFailure {
                     Log.e("MainViewModel", "Failed to disable shortcut for PWA ${pwa.id}", it)
@@ -167,6 +152,7 @@ class MainViewModel(context: Context) : ViewModel() {
                         it
                     )
                 }
+            retryPendingWebProfileDeletions()
         }
     }
 
@@ -176,11 +162,40 @@ class MainViewModel(context: Context) : ViewModel() {
         if (!stillReferenced) PwaIconManager.deleteManagedIcon(appContext, iconPath)
     }
 
-    private fun hostsShareCookieScope(first: String, second: String): Boolean {
-        val a = first.trim('.').lowercase()
-        val b = second.trim('.').lowercase()
-        if (a.isEmpty() || b.isEmpty()) return false
-        return a == b || a.endsWith(".$b") || b.endsWith(".$a")
+    fun setUsedSharedCompatibility(pwaId: Long, used: Boolean) {
+        viewModelScope.launch {
+            pwaDao.setUsedSharedCompatibility(pwaId, used)
+        }
+    }
+
+    fun retryPendingWebProfileDeletions() {
+        profileDeletionRetryRequested = true
+        if (profileDeletionRetryJob?.isActive == true) return
+        profileDeletionRetryJob = viewModelScope.launch {
+            do {
+                profileDeletionRetryRequested = false
+                pendingProfileDeletionDao.getAll().forEach { pending ->
+                    try {
+                        val result = PwaWebProfileManager.deleteProfile(pending.profileName)
+                        if (result != null) {
+                            pendingProfileDeletionDao.delete(pending.profileName)
+                        }
+                    } catch (error: IllegalStateException) {
+                        Log.i(
+                            "MainViewModel",
+                            "Web profile ${pending.profileName} is still active; deletion deferred",
+                            error
+                        )
+                    } catch (error: Exception) {
+                        Log.e(
+                            "MainViewModel",
+                            "Failed to delete Web profile ${pending.profileName}",
+                            error
+                        )
+                    }
+                }
+            } while (profileDeletionRetryRequested)
+        }
     }
 
 

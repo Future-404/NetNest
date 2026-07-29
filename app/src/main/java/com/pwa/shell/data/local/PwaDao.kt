@@ -26,10 +26,16 @@ interface PwaDao {
     @Delete
     suspend fun delete(pwa: PwaEntity)
 
+    @Query("UPDATE pwas SET usedSharedCompatibility = :used WHERE id = :pwaId")
+    suspend fun setUsedSharedCompatibility(pwaId: Long, used: Boolean)
+
+    @Query("UPDATE pwas SET displayOrder = :displayOrder WHERE id = :pwaId")
+    suspend fun updateDisplayOrder(pwaId: Long, displayOrder: Int)
+
     @Transaction
     suspend fun batchUpdateDisplayOrder(pwas: List<PwaEntity>) {
         pwas.forEach { pwa ->
-            update(pwa)
+            updateDisplayOrder(pwa.id, pwa.displayOrder)
         }
     }
 }

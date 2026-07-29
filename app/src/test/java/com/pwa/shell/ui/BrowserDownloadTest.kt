@@ -44,4 +44,12 @@ class BrowserDownloadTest {
         assertEquals("1 KB", formatDownloadSize(1024))
         assertEquals("1.5 MB", formatDownloadSize(1024L * 1024L + 512L * 1024L))
     }
+
+    @Test
+    fun `captures and sanitizes the originating profile cookie header`() {
+        assertEquals(
+            "session=profile-aInjected: value",
+            sanitizeHeaderValue("session=profile-a\r\nInjected: value")
+        )
+    }
 }
