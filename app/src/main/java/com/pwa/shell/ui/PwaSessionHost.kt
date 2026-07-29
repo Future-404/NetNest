@@ -347,6 +347,13 @@ fun PwaSessionHost(
                         onSettingsTileIndexChanged = { index ->
                             globalSettingsPreferences.saveSettingsTileIndex(index)
                         },
+                        addAppTileIndex = normalizeSystemTileIndex(
+                            globalSettingsPreferences.loadAddAppTileIndex(),
+                            pwas.size
+                        ),
+                        onAddAppTileIndexChanged = { index ->
+                            globalSettingsPreferences.saveAddAppTileIndex(index)
+                        },
                         onSettingsClick = { settingsOpen = true },
                         onPwaClick = { activate(it.id, PwaActivationSource.HOME) },
                         onPwaUpdate = { previous, updated ->

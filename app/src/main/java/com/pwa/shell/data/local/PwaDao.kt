@@ -1,7 +1,6 @@
 package com.pwa.shell.data.local
 
 import androidx.room.Dao
-import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -23,8 +22,8 @@ interface PwaDao {
     @Update
     suspend fun update(pwa: PwaEntity)
 
-    @Delete
-    suspend fun delete(pwa: PwaEntity)
+    @Query("DELETE FROM pwas WHERE id = :id")
+    suspend fun deleteById(id: Long)
 
     @Query("UPDATE pwas SET usedSharedCompatibility = :used WHERE id = :pwaId")
     suspend fun setUsedSharedCompatibility(pwaId: Long, used: Boolean)

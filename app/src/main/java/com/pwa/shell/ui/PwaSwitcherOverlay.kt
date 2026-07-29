@@ -68,6 +68,8 @@ import com.pwa.shell.data.local.PwaEntity
 import java.io.File
 import kotlin.math.roundToInt
 
+import com.pwa.shell.ui.theme.glassmorphic
+
 @Composable
 fun PwaSwitcherOverlay(
     currentPwa: PwaEntity,
@@ -92,7 +94,7 @@ fun PwaSwitcherOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.12f))
+                    .background(Color.Black.copy(alpha = 0.35f))
                     .clickable { onDrawerOpenChange(false) }
             )
             SwitcherDrawer(
@@ -167,7 +169,7 @@ private fun SwitcherHandle(
     val rootView = LocalView.current
     val haptics = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
-    val visualAlpha = if (pressed) maxOf(opacity, 0.55f) else opacity
+    val visualAlpha = if (pressed) maxOf(opacity, 0.70f) else opacity
 
     DisposableEffect(Unit) {
         onDispose {
@@ -272,15 +274,15 @@ private fun SwitcherHandle(
     ) {
         Surface(
             modifier = Modifier
-                .width(6.dp)
-                .height(56.dp)
+                .width(7.dp)
+                .height(58.dp)
                 .alpha(visualAlpha),
             shape = if (side == SwitcherSide.LEFT) {
-                RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp)
+                RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp)
             } else {
-                RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp)
+                RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
             },
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.primary
         ) {}
     }
 }
@@ -301,18 +303,18 @@ private fun SwitcherDrawer(
 ) {
     var opacityDraft by remember { mutableFloatStateOf(placement.handleOpacity) }
 
-    Surface(
+    Box(
         modifier = modifier
-            .width(116.dp)
-            .padding(vertical = 12.dp),
-        shape = if (placement.side == SwitcherSide.LEFT) {
-            RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
-        } else {
-            RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)
-        },
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        tonalElevation = 8.dp,
-        shadowElevation = 12.dp
+            .width(120.dp)
+            .padding(vertical = 12.dp)
+            .glassmorphic(
+                shape = if (placement.side == SwitcherSide.LEFT) {
+                    RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
+                } else {
+                    RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)
+                },
+                elevation = 16.dp
+            )
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp),
@@ -349,7 +351,7 @@ private fun SwitcherDrawer(
                         contentDescription = "侧边条透明度"
                     }
             )
-            HorizontalDivider()
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             repeat(4) { index ->
                 val pwa = pwas.getOrNull(index)
                 if (pwa == null) {
@@ -365,12 +367,16 @@ private fun SwitcherDrawer(
                     )
                 }
             }
-            HorizontalDivider()
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             IconButton(
                 onClick = onHomeSelected,
                 modifier = Modifier.size(52.dp)
             ) {
-                Icon(Icons.Default.Home, contentDescription = "返回首页")
+                Icon(
+                    Icons.Default.Home,
+                    contentDescription = "返回首页",
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }

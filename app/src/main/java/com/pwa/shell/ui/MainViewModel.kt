@@ -152,7 +152,7 @@ class MainViewModel(context: Context) : ViewModel() {
                         PendingWebProfileDeletionEntity(profileName)
                     )
                 }
-                pwaDao.delete(pwa)
+                pwaDao.deleteById(pwa.id)
             }
 
             runCatching { disablePinnedPwaShortcut(appContext, pwa.id) }

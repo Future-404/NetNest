@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -66,6 +68,7 @@ import coil.decode.SvgDecoder
 import coil.ImageLoader
 import coil.request.ImageRequest
 import com.pwa.shell.data.local.PwaEntity
+import com.pwa.shell.ui.theme.glassmorphic
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
@@ -80,18 +83,37 @@ private sealed interface HomeGridItem {
     data object Settings : HomeGridItem {
         override val stableKey: Any = "netnest_system_settings"
     }
+
+    data object AddApp : HomeGridItem {
+        override val stableKey: Any = "netnest_system_add_app"
+    }
 }
 
 private fun buildHomeGridItems(
     pwas: List<PwaEntity>,
-    settingsTileIndex: Int
+    settingsTileIndex: Int,
+    addAppTileIndex: Int
 ): List<HomeGridItem> {
     val result = pwas.mapTo(mutableListOf<HomeGridItem>()) { HomeGridItem.Pwa(it) }
-    result.add(
-        normalizeSettingsTileIndex(settingsTileIndex, pwas.size),
-        HomeGridItem.Settings
-    )
+
+    val systemItems = listOf(
+        HomeGridItem.Settings to settingsTileIndex,
+        HomeGridItem.AddApp to addAppTileIndex
+    ).sortedBy { it.second }
+
+    for ((item, targetIdx) in systemItems) {
+        val idx = targetIdx.coerceIn(0, result.size)
+        result.add(idx, item)
+    }
     return result
+}
+
+internal fun stableKeyTargetIndex(
+    orderedKeys: List<Any>,
+    targetKey: Any?
+): Int? {
+    if (targetKey == null) return null
+    return orderedKeys.indexOfFirst { it == targetKey }.takeIf { it >= 0 }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -100,6 +122,8 @@ fun HomeScreen(
     viewModel: MainViewModel,
     settingsTileIndex: Int,
     onSettingsTileIndexChanged: (Int) -> Unit,
+    addAppTileIndex: Int,
+    onAddAppTileIndexChanged: (Int) -> Unit,
     onSettingsClick: () -> Unit,
     onPwaClick: (PwaEntity) -> Unit,
     onPwaUpdate: (previous: PwaEntity, updated: PwaEntity) -> Unit,
@@ -107,6 +131,11 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val globalSettingsPreferences = remember(context) { GlobalSettingsPreferences(context) }
+    var settingsCustomIcon by remember { mutableStateOf(globalSettingsPreferences.loadSettingsCustomIcon()) }
+    var addAppCustomIcon by remember { mutableStateOf(globalSettingsPreferences.loadAddAppCustomIcon()) }
+    var targetSystemAppForIconPicker by remember { mutableStateOf<String?>(null) }
+
     val pwas by viewModel.pwaList.collectAsState(initial = emptyList())
     val uiState by viewModel.uiState.collectAsState()
     val homeScope = rememberCoroutineScope()
@@ -118,32 +147,78 @@ fun HomeScreen(
     var dragInMotion by remember { mutableStateOf(false) }
     val autoScrollEdge = with(LocalDensity.current) { 72.dp.toPx() }
 
-    LaunchedEffect(pwas, settingsTileIndex) {
+    val systemIconPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null && targetSystemAppForIconPicker != null) {
+            homeScope.launch {
+                PwaIconManager.importCustomIcon(context.applicationContext, uri).onSuccess { path ->
+                    if (targetSystemAppForIconPicker == "settings") {
+                        val previousPath = settingsCustomIcon
+                        settingsCustomIcon = path
+                        globalSettingsPreferences.saveSettingsCustomIcon(path)
+                        previousPath
+                            ?.takeIf { it != path }
+                            ?.let { PwaIconManager.deleteManagedIcon(context, it) }
+                    } else if (targetSystemAppForIconPicker == "add_app") {
+                        val previousPath = addAppCustomIcon
+                        addAppCustomIcon = path
+                        globalSettingsPreferences.saveAddAppCustomIcon(path)
+                        previousPath
+                            ?.takeIf { it != path }
+                            ?.let { PwaIconManager.deleteManagedIcon(context, it) }
+                    }
+                    Toast.makeText(context, "图标设置成功", Toast.LENGTH_SHORT).show()
+                }.onFailure {
+                    Toast.makeText(context, "图标设置失败: ${it.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+                targetSystemAppForIconPicker = null
+            }
+        }
+    }
+
+    fun resetSystemAppIcon(target: String) {
+        if (target == "settings") {
+            settingsCustomIcon?.let { PwaIconManager.deleteManagedIcon(context, it) }
+            settingsCustomIcon = null
+            globalSettingsPreferences.saveSettingsCustomIcon(null)
+        } else if (target == "add_app") {
+            addAppCustomIcon?.let { PwaIconManager.deleteManagedIcon(context, it) }
+            addAppCustomIcon = null
+            globalSettingsPreferences.saveAddAppCustomIcon(null)
+        }
+        Toast.makeText(context, "已恢复默认图标", Toast.LENGTH_SHORT).show()
+    }
+
+    LaunchedEffect(pwas, settingsTileIndex, addAppTileIndex) {
         if (draggedItemKey == null) {
-            displayedItems = buildHomeGridItems(pwas, settingsTileIndex)
+            displayedItems = buildHomeGridItems(pwas, settingsTileIndex, addAppTileIndex)
         }
     }
 
     fun persistHomeOrder(items: List<HomeGridItem>) {
         val reorderedPwas = items.mapNotNull { (it as? HomeGridItem.Pwa)?.value }
-        val newSettingsIndex = items.indexOf(HomeGridItem.Settings)
-            .coerceAtLeast(0)
-            .coerceAtMost(reorderedPwas.size)
+        val newSettingsIndex = items.indexOf(HomeGridItem.Settings).coerceAtLeast(0)
+        val newAddAppIndex = items.indexOf(HomeGridItem.AddApp).coerceAtLeast(0)
         onSettingsTileIndexChanged(newSettingsIndex)
+        onAddAppTileIndexChanged(newAddAppIndex)
         viewModel.reorderPwas(reorderedPwas)
     }
 
     fun moveDraggedItemTo(position: Offset) {
         val draggedIndex = displayedItems.indexOfFirst { it.stableKey == draggedItemKey }
-        val targetIndex = gridState.layoutInfo.visibleItemsInfo
+        val targetKey = gridState.layoutInfo.visibleItemsInfo
             .firstOrNull { item ->
-                item.index < displayedItems.size &&
-                    position.x >= item.offset.x &&
+                position.x >= item.offset.x &&
                     position.x <= item.offset.x + item.size.width &&
                     position.y >= item.offset.y &&
                     position.y <= item.offset.y + item.size.height
             }
-            ?.index
+            ?.key
+        val targetIndex = stableKeyTargetIndex(
+            orderedKeys = displayedItems.map { it.stableKey },
+            targetKey = targetKey
+        )
         if (draggedIndex >= 0 && targetIndex != null && draggedIndex != targetIndex) {
             displayedItems = moveListItem(displayedItems, draggedIndex, targetIndex)
         }
@@ -181,18 +256,8 @@ fun HomeScreen(
     }
 
     Scaffold(
-        topBar = {}, // Removed top bar for edge-to-edge immersion
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showAddDialog = true },
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                shape = RoundedCornerShape(16.dp),
-                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 2.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "添加 PWA")
-            }
-        },
+        topBar = {},
+        floatingActionButton = {}, // Removed FAB as AddApp is now a system app tile on grid
         containerColor = MaterialTheme.colorScheme.background,
         modifier = modifier
     ) { paddingValues ->
@@ -202,14 +267,72 @@ fun HomeScreen(
                 .padding(paddingValues)
         ) {
             LazyVerticalGrid(
-                    columns = GridCells.Fixed(4), // 4 columns per row
-                    state = gridState,
-                    modifier = Modifier
-                        .fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
-                ) {
+                columns = GridCells.Fixed(4), // 4 columns per row
+                state = gridState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(22.dp)
+            ) {
+                // Glassmorphic top header
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 28.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        // Title Bar with Neon Glow Accent
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "NetNest",
+                                        style = MaterialTheme.typography.headlineMedium.copy(
+                                            fontWeight = FontWeight.ExtraBold,
+                                            letterSpacing = (-0.5).sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                Brush.linearGradient(
+                                                    listOf(
+                                                        MaterialTheme.colorScheme.primary,
+                                                        MaterialTheme.colorScheme.secondary
+                                                    )
+                                                )
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "PRO",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "共 ${pwas.size} 个网络应用桌面入口",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                    }
+                }
+
                     itemsIndexed(
                         displayedItems,
                         key = { _, item -> item.stableKey }
@@ -323,10 +446,39 @@ fun HomeScreen(
                                 SettingsGridItem(
                                     index = index,
                                     totalItems = displayedItems.size,
+                                    customIconPath = settingsCustomIcon,
+                                    imageLoader = imageLoader,
                                     modifier = itemModifier,
                                     isDragging = draggedItemKey == item.stableKey,
                                     dragTranslation = dragTranslation,
                                     onClick = onSettingsClick,
+                                    onChangeIcon = {
+                                        targetSystemAppForIconPicker = "settings"
+                                        systemIconPickerLauncher.launch(arrayOf("image/*"))
+                                    },
+                                    onResetIcon = { resetSystemAppIcon("settings") },
+                                    onMove = ::moveItem,
+                                    onDragStart = ::beginDrag,
+                                    onDrag = ::dragBy,
+                                    onDragEnd = ::endDrag,
+                                    onDragCancel = ::cancelDrag
+                                )
+                            }
+                            HomeGridItem.AddApp -> {
+                                AddAppGridItem(
+                                    index = index,
+                                    totalItems = displayedItems.size,
+                                    customIconPath = addAppCustomIcon,
+                                    imageLoader = imageLoader,
+                                    modifier = itemModifier,
+                                    isDragging = draggedItemKey == item.stableKey,
+                                    dragTranslation = dragTranslation,
+                                    onClick = { showAddDialog = true },
+                                    onChangeIcon = {
+                                        targetSystemAppForIconPicker = "add_app"
+                                        systemIconPickerLauncher.launch(arrayOf("image/*"))
+                                    },
+                                    onResetIcon = { resetSystemAppIcon("add_app") },
                                     onMove = ::moveItem,
                                     onDragStart = ::beginDrag,
                                     onDrag = ::dragBy,
@@ -520,6 +672,9 @@ fun HomeScreen(
                         TextButton(
                             onClick = {
                                 onPwaDelete(pwa)
+                                displayedItems = displayedItems.filterNot {
+                                    it is HomeGridItem.Pwa && it.value.id == pwa.id
+                                }
                                 showDeleteConfirmDialog = null
                             }
                         ) {
@@ -558,8 +713,7 @@ fun PwaGridItem(
     onDragCancel: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val softColor = remember(pwa.url) { getSoftColor(pwa.url) }
-    val iconShape = RoundedCornerShape(20.dp)
+    val iconShape = RoundedCornerShape(22.dp)
     val hapticFeedback = LocalHapticFeedback.current
     val dragTouchSlop = LocalViewConfiguration.current.touchSlop
     val latestOnDragStart by rememberUpdatedState(onDragStart)
@@ -574,8 +728,8 @@ fun PwaGridItem(
             .graphicsLayer {
                 translationX = dragTranslation.x
                 translationY = dragTranslation.y
-                scaleX = if (isDragging) 1.08f else 1f
-                scaleY = if (isDragging) 1.08f else 1f
+                scaleX = if (isDragging) 1.10f else 1f
+                scaleY = if (isDragging) 1.10f else 1f
             }
             .pointerInput(pwa.id, dragTouchSlop) {
                 val dragGate = LongPressDragGate(dragTouchSlop)
@@ -613,17 +767,14 @@ fun PwaGridItem(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Flat Desktop Icon Box (iOS/Android Modern Style)
+        // Glass Desktop Icon Box
         Box(
             modifier = Modifier
                 .size(64.dp)
-                .shadow(
-                    elevation = if (isDragging) 12.dp else 0.dp,
+                .glassmorphic(
                     shape = iconShape,
-                    clip = false
-                )
-                .clip(iconShape)
-                .background(softColor),
+                    elevation = if (isDragging) 16.dp else 4.dp
+                ),
             contentAlignment = Alignment.Center
         ) {
             if (pwa.iconPath.isNotEmpty() && File(pwa.iconPath).exists()) {
@@ -634,27 +785,34 @@ fun PwaGridItem(
                         .build(),
                     imageLoader = imageLoader,
                     contentDescription = pwa.name,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(iconShape),
                     contentScale = ContentScale.Fit
                 )
             } else {
-                // Consistent soft colored placeholder showing first uppercase character
-                Text(
-                    text = pwa.name.take(1).uppercase(),
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF49454F).copy(alpha = 0.8f)
-                )
+                // Translucent Glass Letter Placeholder
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = pwa.name.take(1).uppercase(),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                    )
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Title Label
         Text(
             text = pwa.name,
             fontSize = 12.sp,
-            fontWeight = FontWeight.Normal,
+            fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -670,19 +828,19 @@ fun PwaGridItem(
                 offset = DpOffset(x = (-30).dp, y = (-20).dp),
                 modifier = Modifier
                     .width(232.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .glassmorphic(shape = RoundedCornerShape(20.dp), elevation = 12.dp)
             ) {
                 Text(
                     text = pwa.name,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
                 )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 DropdownMenuItem(
-                    text = { Text("编辑应用") },
+                    text = { Text("编辑应用", fontWeight = FontWeight.Medium) },
                     leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                     modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
                     onClick = {
@@ -691,7 +849,7 @@ fun PwaGridItem(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("添加到桌面") },
+                    text = { Text("添加到桌面", fontWeight = FontWeight.Medium) },
                     leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
                     modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
                     onClick = {
@@ -702,7 +860,7 @@ fun PwaGridItem(
 
                 if (index > 0) {
                     DropdownMenuItem(
-                        text = { Text("向左移动") },
+                        text = { Text("向左移动", fontWeight = FontWeight.Medium) },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null) },
                         modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
                         onClick = {
@@ -713,7 +871,7 @@ fun PwaGridItem(
                 }
                 if (index < totalItems - 1) {
                     DropdownMenuItem(
-                        text = { Text("向右移动") },
+                        text = { Text("向右移动", fontWeight = FontWeight.Medium) },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
                         modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
                         onClick = {
@@ -723,11 +881,11 @@ fun PwaGridItem(
                     )
                 }
                 HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                 )
                 DropdownMenuItem(
-                    text = { Text("删除应用") },
+                    text = { Text("删除应用", fontWeight = FontWeight.SemiBold) },
                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                     colors = MenuDefaults.itemColors(
                         textColor = MaterialTheme.colorScheme.error,
@@ -735,8 +893,7 @@ fun PwaGridItem(
                     ),
                     modifier = Modifier
                         .padding(horizontal = 8.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)),
+                        .clip(RoundedCornerShape(12.dp)),
                     onClick = {
                         expanded = false
                         onDelete()
@@ -752,10 +909,14 @@ fun PwaGridItem(
 private fun SettingsGridItem(
     index: Int,
     totalItems: Int,
+    customIconPath: String?,
+    imageLoader: ImageLoader,
     modifier: Modifier = Modifier,
     isDragging: Boolean,
     dragTranslation: Offset,
     onClick: () -> Unit,
+    onChangeIcon: () -> Unit,
+    onResetIcon: () -> Unit,
     onMove: (Int) -> Unit,
     onDragStart: () -> Unit,
     onDrag: (Offset) -> Unit,
@@ -763,7 +924,7 @@ private fun SettingsGridItem(
     onDragCancel: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val iconShape = RoundedCornerShape(20.dp)
+    val iconShape = RoundedCornerShape(22.dp)
     val hapticFeedback = LocalHapticFeedback.current
     val dragTouchSlop = LocalViewConfiguration.current.touchSlop
     val latestOnDragStart by rememberUpdatedState(onDragStart)
@@ -778,8 +939,8 @@ private fun SettingsGridItem(
             .graphicsLayer {
                 translationX = dragTranslation.x
                 translationY = dragTranslation.y
-                scaleX = if (isDragging) 1.08f else 1f
-                scaleY = if (isDragging) 1.08f else 1f
+                scaleX = if (isDragging) 1.10f else 1f
+                scaleY = if (isDragging) 1.10f else 1f
             }
             .pointerInput(dragTouchSlop) {
                 val dragGate = LongPressDragGate(dragTouchSlop)
@@ -822,29 +983,47 @@ private fun SettingsGridItem(
         Box(
             modifier = Modifier
                 .size(64.dp)
-                .shadow(
-                    elevation = if (isDragging) 12.dp else 0.dp,
+                .glassmorphic(
                     shape = iconShape,
-                    clip = false
-                )
-                .clip(iconShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                    elevation = if (isDragging) 16.dp else 4.dp
+                ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = null,
-                modifier = Modifier.size(34.dp),
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
+            if (!customIconPath.isNullOrBlank() && File(customIconPath).isFile) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(File(customIconPath))
+                        .crossfade(true)
+                        .build(),
+                    imageLoader = imageLoader,
+                    contentDescription = "设置",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(iconShape),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                // Translucent Glass Default Settings Icon
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null,
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                    )
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         Text(
             text = "设置",
             fontSize = 12.sp,
-            fontWeight = FontWeight.Normal,
+            fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -859,18 +1038,38 @@ private fun SettingsGridItem(
                 offset = DpOffset(x = (-30).dp, y = (-20).dp),
                 modifier = Modifier
                     .width(232.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .glassmorphic(shape = RoundedCornerShape(20.dp), elevation = 12.dp)
             ) {
                 Text(
-                    text = "设置",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                    text = "设置应用",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
                 )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                DropdownMenuItem(
+                    text = { Text("更改图标", fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
+                    onClick = {
+                        expanded = false
+                        onChangeIcon()
+                    }
+                )
+                if (!customIconPath.isNullOrBlank()) {
+                    DropdownMenuItem(
+                        text = { Text("恢复默认图标", fontWeight = FontWeight.Medium) },
+                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                        modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
+                        onClick = {
+                            expanded = false
+                            onResetIcon()
+                        }
+                    )
+                }
                 if (index > 0) {
                     DropdownMenuItem(
-                        text = { Text("向左移动") },
+                        text = { Text("向左移动", fontWeight = FontWeight.Medium) },
                         leadingIcon = {
                             Icon(
                                 Icons.AutoMirrored.Filled.KeyboardArrowLeft,
@@ -888,7 +1087,220 @@ private fun SettingsGridItem(
                 }
                 if (index < totalItems - 1) {
                     DropdownMenuItem(
-                        text = { Text("向右移动") },
+                        text = { Text("向右移动", fontWeight = FontWeight.Medium) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier
+                            .padding(horizontal = 8.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        onClick = {
+                            expanded = false
+                            onMove(1)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AddAppGridItem(
+    index: Int,
+    totalItems: Int,
+    customIconPath: String?,
+    imageLoader: ImageLoader,
+    modifier: Modifier = Modifier,
+    isDragging: Boolean,
+    dragTranslation: Offset,
+    onClick: () -> Unit,
+    onChangeIcon: () -> Unit,
+    onResetIcon: () -> Unit,
+    onMove: (Int) -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: (Boolean) -> Unit,
+    onDragCancel: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val iconShape = RoundedCornerShape(22.dp)
+    val hapticFeedback = LocalHapticFeedback.current
+    val dragTouchSlop = LocalViewConfiguration.current.touchSlop
+    val latestOnDragStart by rememberUpdatedState(onDragStart)
+    val latestOnDrag by rememberUpdatedState(onDrag)
+    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
+    val latestOnDragCancel by rememberUpdatedState(onDragCancel)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                translationX = dragTranslation.x
+                translationY = dragTranslation.y
+                scaleX = if (isDragging) 1.10f else 1f
+                scaleY = if (isDragging) 1.10f else 1f
+            }
+            .pointerInput(dragTouchSlop) {
+                val dragGate = LongPressDragGate(dragTouchSlop)
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        dragGate.reset()
+                        expanded = false
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        latestOnDragStart()
+                    },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragGate.track(amount)?.let(latestOnDrag)
+                    },
+                    onDragEnd = {
+                        latestOnDragEnd(dragGate.isDragging)
+                        if (!dragGate.isDragging && totalItems > 1) expanded = true
+                    },
+                    onDragCancel = {
+                        dragGate.reset()
+                        latestOnDragCancel()
+                    }
+                )
+            }
+            .semantics {
+                onLongClick(label = "移动或编辑添加应用图标") {
+                    if (totalItems > 1) {
+                        expanded = true
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+            .clickable(enabled = !isDragging, onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .glassmorphic(
+                    shape = iconShape,
+                    elevation = if (isDragging) 16.dp else 4.dp
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!customIconPath.isNullOrBlank() && File(customIconPath).isFile) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(File(customIconPath))
+                        .crossfade(true)
+                        .build(),
+                    imageLoader = imageLoader,
+                    contentDescription = "添加应用",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(iconShape),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                // Translucent Glass Default Add Icon
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(34.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "添加应用",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 2.dp)
+        )
+
+        Box(modifier = Modifier.size(0.dp)) {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                offset = DpOffset(x = (-30).dp, y = (-20).dp),
+                modifier = Modifier
+                    .width(232.dp)
+                    .glassmorphic(shape = RoundedCornerShape(20.dp), elevation = 12.dp)
+            ) {
+                Text(
+                    text = "添加应用",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                DropdownMenuItem(
+                    text = { Text("添加新应用", fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
+                    onClick = {
+                        expanded = false
+                        onClick()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("更改图标", fontWeight = FontWeight.Medium) },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
+                    onClick = {
+                        expanded = false
+                        onChangeIcon()
+                    }
+                )
+                if (!customIconPath.isNullOrBlank()) {
+                    DropdownMenuItem(
+                        text = { Text("恢复默认图标", fontWeight = FontWeight.Medium) },
+                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                        modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)),
+                        onClick = {
+                            expanded = false
+                            onResetIcon()
+                        }
+                    )
+                }
+                if (index > 0) {
+                    DropdownMenuItem(
+                        text = { Text("向左移动", fontWeight = FontWeight.Medium) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier
+                            .padding(horizontal = 8.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        onClick = {
+                            expanded = false
+                            onMove(-1)
+                        }
+                    )
+                }
+                if (index < totalItems - 1) {
+                    DropdownMenuItem(
+                        text = { Text("向右移动", fontWeight = FontWeight.Medium) },
                         leadingIcon = {
                             Icon(
                                 Icons.AutoMirrored.Filled.KeyboardArrowRight,

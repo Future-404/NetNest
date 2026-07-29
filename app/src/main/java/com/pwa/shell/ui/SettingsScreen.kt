@@ -13,6 +13,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,8 +25,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -58,6 +57,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
+
+import com.pwa.shell.ui.theme.glassmorphicCard
 
 sealed interface ManualUpdateCheckResult {
     data object UpToDate : ManualUpdateCheckResult
@@ -108,7 +109,7 @@ fun SettingsScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("设置") },
+                title = { Text("设置", style = MaterialTheme.typography.titleLarge) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -134,158 +135,153 @@ fun SettingsScreen(
         ) {
             item {
                 SettingsSectionTitle("外观")
-                Card(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer
-                    )
+                        .padding(top = 8.dp)
+                        .glassmorphicCard(shape = RoundedCornerShape(20.dp))
                 ) {
-                    ThemeModeOption(
-                        title = "跟随系统",
-                        description = "随 Android 的深色模式自动切换",
-                        selected = themeMode == AppThemeMode.SYSTEM,
-                        onClick = { onThemeModeChanged(AppThemeMode.SYSTEM) }
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant
-                    )
-                    ThemeModeOption(
-                        title = "浅色",
-                        description = "始终使用浅色 NetNest 界面",
-                        selected = themeMode == AppThemeMode.LIGHT,
-                        onClick = { onThemeModeChanged(AppThemeMode.LIGHT) }
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant
-                    )
-                    ThemeModeOption(
-                        title = "深色",
-                        description = "始终使用深色 NetNest 界面",
-                        selected = themeMode == AppThemeMode.DARK,
-                        onClick = { onThemeModeChanged(AppThemeMode.DARK) }
-                    )
+                    Column {
+                        ThemeModeOption(
+                            title = "跟随系统",
+                            description = "随 Android 的深色模式自动切换",
+                            selected = themeMode == AppThemeMode.SYSTEM,
+                            onClick = { onThemeModeChanged(AppThemeMode.SYSTEM) }
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        ThemeModeOption(
+                            title = "浅色",
+                            description = "始终使用浅色 NetNest 界面",
+                            selected = themeMode == AppThemeMode.LIGHT,
+                            onClick = { onThemeModeChanged(AppThemeMode.LIGHT) }
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        ThemeModeOption(
+                            title = "深色",
+                            description = "始终使用深色 NetNest 界面",
+                            selected = themeMode == AppThemeMode.DARK,
+                            onClick = { onThemeModeChanged(AppThemeMode.DARK) }
+                        )
+                    }
                 }
             }
 
             item {
                 SettingsSectionTitle("应用")
-                Card(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer
-                    )
+                        .padding(top = 8.dp)
+                        .glassmorphicCard(shape = RoundedCornerShape(20.dp))
                 ) {
-                    ActionSettingsRow(
-                        title = "检查更新",
-                        description = if (checkingUpdate) {
-                            "正在连接 GitHub 检查最新发行版"
-                        } else {
-                            "当前版本 $appVersion"
-                        },
-                        enabled = !checkingUpdate,
-                        trailing = {
-                            if (checkingUpdate) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    strokeWidth = 2.dp
-                                )
+                    Column {
+                        ActionSettingsRow(
+                            title = "检查更新",
+                            description = if (checkingUpdate) {
+                                "正在连接 GitHub 检查最新发行版"
                             } else {
-                                Text(
-                                    text = "检查",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        },
-                        onClick = {
-                            scope.launch {
-                                checkingUpdate = true
-                                when (val result = onCheckForUpdates()) {
-                                    ManualUpdateCheckResult.UpToDate -> {
-                                        snackbarHostState.showSnackbar("当前已是最新版本")
-                                    }
-                                    ManualUpdateCheckResult.UpdateAvailable -> Unit
-                                    is ManualUpdateCheckResult.Failed -> {
-                                        snackbarHostState.showSnackbar(result.message)
-                                    }
-                                }
-                                checkingUpdate = false
-                            }
-                        }
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant
-                    )
-                    ActionSettingsRow(
-                        title = "通知权限",
-                        description = if (notificationsEnabled) {
-                            "NetNest 可以发送已授权 PWA 的通知"
-                        } else {
-                            "通知已关闭，点击前往 Android 系统设置"
-                        },
-                        trailing = {
-                            Text(
-                                text = if (notificationsEnabled) "已允许" else "未允许",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = if (notificationsEnabled) {
-                                    MaterialTheme.colorScheme.primary
+                                "当前版本 $appVersion"
+                            },
+                            enabled = !checkingUpdate,
+                            trailing = {
+                                if (checkingUpdate) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.dp
+                                    )
                                 } else {
-                                    MaterialTheme.colorScheme.error
+                                    Text(
+                                        text = "检查",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
                                 }
-                            )
-                        },
-                        onClick = {
-                            runCatching {
-                                notificationSettingsLauncher.launch(
-                                    appNotificationSettingsIntent(context)
-                                )
-                            }.onFailure {
-                                Toast.makeText(
-                                    context,
-                                    "无法打开系统通知设置",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                            },
+                            onClick = {
+                                scope.launch {
+                                    checkingUpdate = true
+                                    when (val result = onCheckForUpdates()) {
+                                        ManualUpdateCheckResult.UpToDate -> {
+                                            snackbarHostState.showSnackbar("当前已是最新版本")
+                                        }
+                                        ManualUpdateCheckResult.UpdateAvailable -> Unit
+                                        is ManualUpdateCheckResult.Failed -> {
+                                            snackbarHostState.showSnackbar(result.message)
+                                        }
+                                    }
+                                    checkingUpdate = false
+                                }
                             }
-                        }
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant
-                    )
-                    ActionSettingsRow(
-                        title = "关于 NetNest",
-                        description = "版本、项目地址与应用说明",
-                        trailing = {
-                            Text(
-                                text = appVersion,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        },
-                        onClick = { showAboutDialog = true }
-                    )
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        ActionSettingsRow(
+                            title = "通知权限",
+                            description = if (notificationsEnabled) {
+                                "NetNest 可以发送已授权 PWA 的通知"
+                            } else {
+                                "通知已关闭，点击前往 Android 系统设置"
+                            },
+                            trailing = {
+                                Text(
+                                    text = if (notificationsEnabled) "已允许" else "未允许",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (notificationsEnabled) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    }
+                                )
+                            },
+                            onClick = {
+                                runCatching {
+                                    notificationSettingsLauncher.launch(
+                                        appNotificationSettingsIntent(context)
+                                    )
+                                }.onFailure {
+                                    Toast.makeText(
+                                        context,
+                                        "无法打开系统通知设置",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        ActionSettingsRow(
+                            title = "关于 NetNest",
+                            description = "版本、项目地址与应用说明",
+                            trailing = {
+                                Text(
+                                    text = appVersion,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            onClick = { showAboutDialog = true }
+                        )
+                    }
                 }
             }
 
             item {
                 SettingsSectionTitle("网络")
-                Card(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer
-                    )
+                        .padding(top = 8.dp)
+                        .glassmorphicCard(shape = RoundedCornerShape(20.dp))
                 ) {
                     Row(
                         modifier = Modifier

@@ -15,21 +15,55 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = PrimaryNeonDark,
+    onPrimary = OnPrimaryDark,
+    primaryContainer = PrimaryContainerDark,
+    onPrimaryContainer = OnPrimaryContainerDark,
+    secondary = SecondaryNeonDark,
+    secondaryContainer = SecondaryContainerDark,
+    onSecondaryContainer = OnSecondaryContainerDark,
+    tertiary = TertiaryNeonDark,
+    tertiaryContainer = TertiaryContainerDark,
+    onTertiaryContainer = OnTertiaryContainerDark,
+    background = GlassBackgroundDark,
+    onBackground = OnBackgroundDark,
+    surface = GlassSurfaceDark,
+    onSurface = OnSurfaceDark,
+    surfaceVariant = GlassSurfaceVariantDark,
+    onSurfaceVariant = OnSurfaceVariantDark,
+    surfaceContainer = GlassSurfaceContainerDark,
+    surfaceContainerHigh = GlassSurfaceHighDark,
+    outline = OutlineDark,
+    outlineVariant = OutlineVariantDark
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
+    primary = PrimaryVividLight,
+    onPrimary = OnPrimaryLight,
+    primaryContainer = PrimaryContainerLight,
+    onPrimaryContainer = OnPrimaryContainerLight,
+    secondary = SecondaryVividLight,
+    secondaryContainer = SecondaryContainerLight,
+    onSecondaryContainer = OnSecondaryContainerLight,
+    tertiary = TertiaryVividLight,
+    tertiaryContainer = TertiaryContainerLight,
+    onTertiaryContainer = OnTertiaryContainerLight,
+    background = GlassBackgroundLight,
+    onBackground = OnBackgroundLight,
+    surface = GlassSurfaceLight,
+    onSurface = OnSurfaceLight,
+    surfaceVariant = GlassSurfaceVariantLight,
+    onSurfaceVariant = OnSurfaceVariantLight,
+    surfaceContainer = GlassSurfaceContainerLight,
+    surfaceContainerHigh = GlassSurfaceHighLight,
+    outline = OutlineLight,
+    outlineVariant = OutlineVariantLight
 )
 
 @Composable
 fun NetNestTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false, // Set default to false to prioritize NetNest's custom Glassmorphism theme
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -46,7 +80,7 @@ fun NetNestTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            // Configure status bar and navigation bar to be fully transparent
+            // Configure status bar and navigation bar to be fully transparent for Glassmorphism
             window.statusBarColor = android.graphics.Color.TRANSPARENT
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
             
