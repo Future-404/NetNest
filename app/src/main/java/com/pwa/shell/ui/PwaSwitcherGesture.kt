@@ -40,3 +40,23 @@ fun isOutwardCloseGesture(
         SwitcherSide.RIGHT -> deltaX >= thresholdPx
     }
 }
+
+internal fun switcherPlacementAfterDrag(
+    start: SwitcherPlacement,
+    deltaX: Float,
+    deltaY: Float,
+    availableHeightPx: Float,
+    horizontalThresholdPx: Float,
+    applyHorizontalSide: Boolean
+): SwitcherPlacement {
+    val side = if (applyHorizontalSide && abs(deltaX) >= horizontalThresholdPx) {
+        if (deltaX < 0f) SwitcherSide.LEFT else SwitcherSide.RIGHT
+    } else {
+        start.side
+    }
+    return start.copy(
+        side = side,
+        verticalRatio = start.verticalRatio +
+            deltaY / availableHeightPx.coerceAtLeast(1f)
+    ).normalized()
+}

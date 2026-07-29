@@ -9,7 +9,6 @@ import android.os.SystemClock
 import android.view.WindowManager
 import android.webkit.WebView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +29,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -78,20 +78,25 @@ fun PwaSessionHost(
     memoryPressureSignal: Long,
     onHomeVisibilityChanged: (Boolean) -> Unit,
     onShortcutMissing: () -> Unit,
+    themeMode: AppThemeMode,
+    darkTheme: Boolean,
+    onThemeModeChanged: (AppThemeMode) -> Unit,
+    onCheckForUpdates: suspend () -> ManualUpdateCheckResult,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val rootView = LocalView.current
-    val darkTheme = isSystemInDarkTheme()
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val preferences = remember { PwaSwitcherPreferences(context) }
+    val globalSettingsPreferences = remember { GlobalSettingsPreferences(context) }
     val manager = remember {
         PwaSessionManager(preferences.loadRecentPwaIds())
     }
     var revision by remember { mutableIntStateOf(0) }
     var placement by remember { mutableStateOf(preferences.loadPlacement()) }
     var drawerOpen by remember { mutableStateOf(false) }
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var blockedMessageNonce by remember { mutableLongStateOf(0L) }
     val webViews = remember { mutableStateMapOf<Long, WebView>() }
     val savedNavigationStates = remember { linkedMapOf<Long, Bundle>() }
@@ -103,7 +108,8 @@ fun PwaSessionHost(
     val snapshot = remember(revision) { manager.snapshot() }
     val pwasById = remember(pwas) { pwas.associateBy(PwaEntity::id) }
     val activePwa = snapshot.activePwaId?.let(pwasById::get)
-    val isHome = activePwa == null
+    val isHome = activePwa == null && !settingsOpen
+    val isNativeScreen = activePwa == null
 
     fun saveNavigationState(pwaId: Long) {
         val state = Bundle()
@@ -151,6 +157,7 @@ fun PwaSessionHost(
         val evicted = manager.activate(pwaId, source, SystemClock.elapsedRealtime())
         applyRemoval(evicted)
         revision++
+        settingsOpen = false
         drawerOpen = false
         persistState()
         return true
@@ -164,6 +171,7 @@ fun PwaSessionHost(
         }
         manager.goHome(SystemClock.elapsedRealtime())
         revision++
+        settingsOpen = false
         drawerOpen = false
         persistState()
     }
@@ -194,9 +202,12 @@ fun PwaSessionHost(
         onExternalLaunchConsumed()
     }
 
-    LaunchedEffect(isHome, darkTheme) {
+    LaunchedEffect(isHome) {
         onHomeVisibilityChanged(isHome)
-        if (isHome) {
+    }
+
+    LaunchedEffect(isNativeScreen, darkTheme) {
+        if (isNativeScreen) {
             val window = context.findHostActivity()?.window ?: return@LaunchedEffect
             window.statusBarColor = android.graphics.Color.TRANSPARENT
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
@@ -310,7 +321,7 @@ fun PwaSessionHost(
             }
         }
 
-        if (isHome) {
+        if (isNativeScreen) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -318,30 +329,48 @@ fun PwaSessionHost(
                     .background(MaterialTheme.colorScheme.background)
                     .windowInsetsPadding(WindowInsets.statusBars)
             ) {
-                HomeScreen(
-                    viewModel = viewModel,
-                    onPwaClick = { activate(it.id, PwaActivationSource.HOME) },
-                    onPwaUpdate = { previous, updated ->
-                        if (requiresWebSessionRestart(previous, updated)) {
-                            saveNavigationState(previous.id)
-                            manager.invalidate(previous.id)
-                            savedNavigationStates.remove(previous.id)
+                if (settingsOpen) {
+                    SettingsScreen(
+                        themeMode = themeMode,
+                        onThemeModeChanged = onThemeModeChanged,
+                        onCheckForUpdates = onCheckForUpdates,
+                        onBack = { settingsOpen = false },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    HomeScreen(
+                        viewModel = viewModel,
+                        settingsTileIndex = normalizeSettingsTileIndex(
+                            globalSettingsPreferences.loadSettingsTileIndex(),
+                            pwas.size
+                        ),
+                        onSettingsTileIndexChanged = { index ->
+                            globalSettingsPreferences.saveSettingsTileIndex(index)
+                        },
+                        onSettingsClick = { settingsOpen = true },
+                        onPwaClick = { activate(it.id, PwaActivationSource.HOME) },
+                        onPwaUpdate = { previous, updated ->
+                            if (requiresWebSessionRestart(previous, updated)) {
+                                saveNavigationState(previous.id)
+                                manager.invalidate(previous.id)
+                                savedNavigationStates.remove(previous.id)
+                                revision++
+                            }
+                            viewModel.updatePwa(updated)
+                        },
+                        onPwaDelete = { pwa ->
+                            manager.removePwa(pwa.id)
+                            savedNavigationStates.remove(pwa.id)
                             revision++
-                        }
-                        viewModel.updatePwa(updated)
-                    },
-                    onPwaDelete = { pwa ->
-                        manager.removePwa(pwa.id)
-                        savedNavigationStates.remove(pwa.id)
-                        revision++
-                        persistState()
-                        scope.launch {
-                            withFrameNanos { }
-                            viewModel.deletePwa(pwa)
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                            persistState()
+                            scope.launch {
+                                withFrameNanos { }
+                                viewModel.deletePwa(pwa)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
 
@@ -367,7 +396,11 @@ fun PwaSessionHost(
                 onDrawerOpenChange = { drawerOpen = it },
                 onPlacementChange = {
                     placement = it.normalized()
-                    preferences.savePlacement(placement)
+                },
+                onPlacementChangeFinished = {
+                    val normalized = it.normalized()
+                    placement = normalized
+                    preferences.savePlacement(normalized)
                 },
                 onGestureStart = { manager.beginGesture() },
                 onGestureSwitch = { direction ->

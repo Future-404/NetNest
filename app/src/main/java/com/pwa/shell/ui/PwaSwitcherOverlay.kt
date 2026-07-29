@@ -4,6 +4,7 @@ import android.graphics.Rect
 import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -11,7 +12,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,8 +23,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -35,11 +33,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +45,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -66,7 +65,6 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.pwa.shell.data.local.PwaEntity
-import kotlinx.coroutines.delay
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -80,6 +78,7 @@ fun PwaSwitcherOverlay(
     attentionPwaIds: Set<Long>,
     onDrawerOpenChange: (Boolean) -> Unit,
     onPlacementChange: (SwitcherPlacement) -> Unit,
+    onPlacementChangeFinished: (SwitcherPlacement) -> Unit,
     onGestureStart: () -> List<Long>,
     onGestureSwitch: (PwaGestureDirection) -> Unit,
     onPwaSelected: (PwaEntity) -> Unit,
@@ -88,6 +87,7 @@ fun PwaSwitcherOverlay(
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier) {
+        val availableHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
         if (drawerOpen) {
             Box(
                 modifier = Modifier
@@ -100,7 +100,9 @@ fun PwaSwitcherOverlay(
                 pwas = drawerPwas,
                 livePwaIds = livePwaIds,
                 attentionPwaIds = attentionPwaIds,
+                availableHeightPx = availableHeightPx,
                 onPlacementChange = onPlacementChange,
+                onPlacementChangeFinished = onPlacementChangeFinished,
                 onPwaSelected = onPwaSelected,
                 onHomeSelected = onHomeSelected,
                 onCloseWarmPwa = onCloseWarmPwa,
@@ -112,12 +114,28 @@ fun PwaSwitcherOverlay(
                     }
                 )
             )
+            val previewHeight = 72.dp
+            val previewOffset = (maxHeight - previewHeight) * placement.verticalRatio
+            SwitcherPositionPreview(
+                side = placement.side,
+                opacity = placement.handleOpacity,
+                modifier = Modifier
+                    .align(
+                        if (placement.side == SwitcherSide.LEFT) {
+                            Alignment.TopStart
+                        } else {
+                            Alignment.TopEnd
+                        }
+                    )
+                    .offset(y = previewOffset)
+            )
         } else {
             val handleHeight = 72.dp
             val yOffset = (maxHeight - handleHeight) * placement.verticalRatio
             SwitcherHandle(
                 currentPwa = currentPwa,
                 side = placement.side,
+                opacity = placement.handleOpacity,
                 onTap = { onDrawerOpenChange(true) },
                 onGestureStart = onGestureStart,
                 onGestureSwitch = onGestureSwitch,
@@ -139,6 +157,7 @@ fun PwaSwitcherOverlay(
 private fun SwitcherHandle(
     currentPwa: PwaEntity,
     side: SwitcherSide,
+    opacity: Float,
     onTap: () -> Unit,
     onGestureStart: () -> List<Long>,
     onGestureSwitch: (PwaGestureDirection) -> Unit,
@@ -147,16 +166,8 @@ private fun SwitcherHandle(
     val density = LocalDensity.current
     val rootView = LocalView.current
     val haptics = LocalHapticFeedback.current
-    var visualAlpha by remember { mutableFloatStateOf(0.15f) }
     var pressed by remember { mutableStateOf(false) }
-
-    LaunchedEffect(pressed) {
-        visualAlpha = if (pressed) 0.55f else 0.15f
-        if (!pressed) {
-            delay(3_000L)
-            visualAlpha = 0.05f
-        }
-    }
+    val visualAlpha = if (pressed) maxOf(opacity, 0.55f) else opacity
 
     DisposableEffect(Unit) {
         onDispose {
@@ -280,12 +291,16 @@ private fun SwitcherDrawer(
     pwas: List<PwaEntity>,
     livePwaIds: Set<Long>,
     attentionPwaIds: Set<Long>,
+    availableHeightPx: Float,
     onPlacementChange: (SwitcherPlacement) -> Unit,
+    onPlacementChangeFinished: (SwitcherPlacement) -> Unit,
     onPwaSelected: (PwaEntity) -> Unit,
     onHomeSelected: () -> Unit,
     onCloseWarmPwa: (PwaEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var opacityDraft by remember { mutableFloatStateOf(placement.handleOpacity) }
+
     Surface(
         modifier = modifier
             .width(116.dp)
@@ -304,44 +319,34 @@ private fun SwitcherDrawer(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                IconButton(
-                    onClick = {
-                        onPlacementChange(placement.copy(side = SwitcherSide.LEFT))
-                    },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "移到左侧"
-                    )
-                }
-                IconButton(
-                    onClick = {
-                        onPlacementChange(placement.copy(side = SwitcherSide.RIGHT))
-                    },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = "移到右侧"
-                    )
-                }
-            }
+            SwitcherPositionDragControl(
+                placement = placement,
+                availableHeightPx = availableHeightPx,
+                onPlacementChange = onPlacementChange,
+                onPlacementChangeFinished = onPlacementChangeFinished
+            )
+            Text(
+                text = "透明度 ${(placement.handleOpacity * 100).roundToInt()}%",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Slider(
-                value = placement.verticalRatio,
+                value = opacityDraft,
                 onValueChange = {
-                    onPlacementChange(placement.copy(verticalRatio = it))
+                    opacityDraft = it
+                    onPlacementChange(placement.copy(handleOpacity = it).normalized())
                 },
-                valueRange = SwitcherPlacement.MIN_VERTICAL_RATIO..
-                    SwitcherPlacement.MAX_VERTICAL_RATIO,
+                onValueChangeFinished = {
+                    onPlacementChangeFinished(
+                        placement.copy(handleOpacity = opacityDraft).normalized()
+                    )
+                },
+                valueRange = SwitcherPlacement.MIN_HANDLE_OPACITY..
+                    SwitcherPlacement.MAX_HANDLE_OPACITY,
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics {
-                        contentDescription = "侧边条垂直位置"
+                        contentDescription = "侧边条透明度"
                     }
             )
             HorizontalDivider()
@@ -369,6 +374,155 @@ private fun SwitcherDrawer(
             }
         }
     }
+}
+
+@Composable
+private fun SwitcherPositionDragControl(
+    placement: SwitcherPlacement,
+    availableHeightPx: Float,
+    onPlacementChange: (SwitcherPlacement) -> Unit,
+    onPlacementChangeFinished: (SwitcherPlacement) -> Unit
+) {
+    val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
+    val latestPlacement by rememberUpdatedState(placement)
+    val latestOnPlacementChange by rememberUpdatedState(onPlacementChange)
+    val latestOnPlacementChangeFinished by rememberUpdatedState(onPlacementChangeFinished)
+    val horizontalThresholdPx = with(density) { 48.dp.toPx() }
+
+    fun commit(updated: SwitcherPlacement) {
+        val normalized = updated.normalized()
+        latestOnPlacementChange(normalized)
+        latestOnPlacementChangeFinished(normalized)
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(62.dp)
+            .semantics {
+                contentDescription = "拖动调整侧边条位置"
+                customActions = listOf(
+                    CustomAccessibilityAction("向上移动") {
+                        commit(
+                            latestPlacement.copy(
+                                verticalRatio = latestPlacement.verticalRatio - 0.05f
+                            )
+                        )
+                        true
+                    },
+                    CustomAccessibilityAction("向下移动") {
+                        commit(
+                            latestPlacement.copy(
+                                verticalRatio = latestPlacement.verticalRatio + 0.05f
+                            )
+                        )
+                        true
+                    },
+                    CustomAccessibilityAction("移到左侧") {
+                        commit(latestPlacement.copy(side = SwitcherSide.LEFT))
+                        true
+                    },
+                    CustomAccessibilityAction("移到右侧") {
+                        commit(latestPlacement.copy(side = SwitcherSide.RIGHT))
+                        true
+                    }
+                )
+            }
+            .pointerInput(availableHeightPx) {
+                var startPlacement = placement
+                var totalDrag = Offset.Zero
+                detectDragGestures(
+                    onDragStart = {
+                        startPlacement = latestPlacement
+                        totalDrag = Offset.Zero
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    },
+                    onDrag = { change, dragAmount ->
+                        totalDrag += dragAmount
+                        val draftPlacement = switcherPlacementAfterDrag(
+                            start = startPlacement,
+                            deltaX = totalDrag.x,
+                            deltaY = totalDrag.y,
+                            availableHeightPx = availableHeightPx,
+                            horizontalThresholdPx = horizontalThresholdPx,
+                            applyHorizontalSide = false
+                        )
+                        latestOnPlacementChange(draftPlacement)
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        val finalPlacement = switcherPlacementAfterDrag(
+                            start = startPlacement,
+                            deltaX = totalDrag.x,
+                            deltaY = totalDrag.y,
+                            availableHeightPx = availableHeightPx,
+                            horizontalThresholdPx = horizontalThresholdPx,
+                            applyHorizontalSide = true
+                        )
+                        latestOnPlacementChange(finalPlacement)
+                        latestOnPlacementChangeFinished(finalPlacement)
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    },
+                    onDragCancel = {
+                        latestOnPlacementChange(startPlacement)
+                    }
+                )
+            },
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp, vertical = 7.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(28.dp)
+                    .height(3.dp)
+                    .background(
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                        RoundedCornerShape(2.dp)
+                    )
+            )
+            Text(
+                text = "拖动调整位置",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
+            Text(
+                text = "上下移动 · 左右换边",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SwitcherPositionPreview(
+    side: SwitcherSide,
+    opacity: Float,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .width(6.dp)
+            .height(56.dp)
+            .alpha(opacity),
+        shape = if (side == SwitcherSide.LEFT) {
+            RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp)
+        } else {
+            RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp)
+        },
+        color = MaterialTheme.colorScheme.onSurface
+    ) {}
 }
 
 @Composable

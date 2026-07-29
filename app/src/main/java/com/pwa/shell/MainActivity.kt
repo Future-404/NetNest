@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,9 +26,12 @@ import com.pwa.shell.data.local.PwaEntity
 import com.pwa.shell.data.remote.AppUpdateChecker
 import com.pwa.shell.data.remote.AppUpdateInfo
 import com.pwa.shell.ui.MainViewModel
+import com.pwa.shell.ui.GlobalSettingsPreferences
+import com.pwa.shell.ui.ManualUpdateCheckResult
 import com.pwa.shell.ui.PwaActivationSource
 import com.pwa.shell.ui.PwaExternalLaunch
 import com.pwa.shell.ui.PwaSessionHost
+import com.pwa.shell.ui.resolveDarkTheme
 import com.pwa.shell.ui.getAppVersionName
 import com.pwa.shell.ui.pwaShortcutId
 import com.pwa.shell.ui.theme.NetNestTheme
@@ -50,12 +54,24 @@ class MainActivity : ComponentActivity() {
         val viewModel = MainViewModel(applicationContext)
 
         setContent {
-            NetNestTheme {
+            val settingsPreferences = remember {
+                GlobalSettingsPreferences(applicationContext)
+            }
+            var themeMode by remember {
+                mutableStateOf(settingsPreferences.loadThemeMode())
+            }
+            val systemDarkTheme = isSystemInDarkTheme()
+            val darkTheme = resolveDarkTheme(themeMode, systemDarkTheme)
+
+            NetNestTheme(
+                darkTheme = darkTheme
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+                    var showManualUpdateDialog by remember { mutableStateOf(false) }
                     var isHomeVisible by remember { mutableStateOf(true) }
                     val updateChecker = remember { AppUpdateChecker(applicationContext) }
                     val currentAppVersion = remember {
@@ -114,11 +130,35 @@ class MainActivity : ComponentActivity() {
                                     Toast.LENGTH_LONG
                                 ).show()
                             },
+                            themeMode = themeMode,
+                            darkTheme = darkTheme,
+                            onThemeModeChanged = { selectedMode ->
+                                themeMode = selectedMode
+                                settingsPreferences.saveThemeMode(selectedMode)
+                            },
+                            onCheckForUpdates = {
+                                updateChecker.checkNow(currentAppVersion).fold(
+                                    onSuccess = { update ->
+                                        if (update == null) {
+                                            ManualUpdateCheckResult.UpToDate
+                                        } else {
+                                            availableUpdate = update
+                                            showManualUpdateDialog = true
+                                            ManualUpdateCheckResult.UpdateAvailable
+                                        }
+                                    },
+                                    onFailure = {
+                                        ManualUpdateCheckResult.Failed(
+                                            "检查更新失败，请确认网络连接后重试"
+                                        )
+                                    }
+                                )
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
 
-                    if (isHomeVisible) {
+                    if (isHomeVisible || showManualUpdateDialog) {
                         availableUpdate?.let { update ->
                             AppUpdateDialog(
                                 update = update,
@@ -126,6 +166,7 @@ class MainActivity : ComponentActivity() {
                                 onDismiss = {
                                     updateChecker.snooze(update.versionName)
                                     availableUpdate = null
+                                    showManualUpdateDialog = false
                                 },
                                 onDownload = {
                                     updateChecker.snooze(update.versionName)
@@ -153,6 +194,7 @@ class MainActivity : ComponentActivity() {
                                         ).show()
                                     }
                                     availableUpdate = null
+                                    showManualUpdateDialog = false
                                 }
                             )
                         }

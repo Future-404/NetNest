@@ -15,4 +15,16 @@ class PwaSwitcherPreferencesTest {
             SwitcherPlacement(verticalRatio = 2f).normalized().verticalRatio
         )
     }
+
+    @Test
+    fun `placement clamps handle opacity`() {
+        assertEquals(
+            SwitcherPlacement.MIN_HANDLE_OPACITY,
+            SwitcherPlacement(handleOpacity = -1f).normalized().handleOpacity
+        )
+        assertEquals(
+            SwitcherPlacement.MAX_HANDLE_OPACITY,
+            SwitcherPlacement(handleOpacity = 2f).normalized().handleOpacity
+        )
+    }
 }

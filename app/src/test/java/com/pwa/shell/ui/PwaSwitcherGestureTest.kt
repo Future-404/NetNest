@@ -41,4 +41,33 @@ class PwaSwitcherGestureTest {
         assertFalse(isOutwardCloseGesture(SwitcherSide.LEFT, 40f, 40f))
         assertFalse(isOutwardCloseGesture(SwitcherSide.RIGHT, -40f, 40f))
     }
+
+    @Test
+    fun `position drag changes height and switches side after threshold`() {
+        val start = SwitcherPlacement(
+            side = SwitcherSide.RIGHT,
+            verticalRatio = 0.5f
+        )
+
+        val preview = switcherPlacementAfterDrag(
+            start = start,
+            deltaX = -80f,
+            deltaY = -100f,
+            availableHeightPx = 1_000f,
+            horizontalThresholdPx = 48f,
+            applyHorizontalSide = false
+        )
+        val committed = switcherPlacementAfterDrag(
+            start = start,
+            deltaX = -80f,
+            deltaY = -100f,
+            availableHeightPx = 1_000f,
+            horizontalThresholdPx = 48f,
+            applyHorizontalSide = true
+        )
+
+        assertEquals(0.4f, preview.verticalRatio)
+        assertEquals(SwitcherSide.RIGHT, preview.side)
+        assertEquals(SwitcherSide.LEFT, committed.side)
+    }
 }

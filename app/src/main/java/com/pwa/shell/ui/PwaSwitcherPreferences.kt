@@ -9,16 +9,21 @@ enum class SwitcherSide {
 
 data class SwitcherPlacement(
     val side: SwitcherSide = SwitcherSide.RIGHT,
-    val verticalRatio: Float = DEFAULT_VERTICAL_RATIO
+    val verticalRatio: Float = DEFAULT_VERTICAL_RATIO,
+    val handleOpacity: Float = DEFAULT_HANDLE_OPACITY
 ) {
     fun normalized(): SwitcherPlacement = copy(
-        verticalRatio = verticalRatio.coerceIn(MIN_VERTICAL_RATIO, MAX_VERTICAL_RATIO)
+        verticalRatio = verticalRatio.coerceIn(MIN_VERTICAL_RATIO, MAX_VERTICAL_RATIO),
+        handleOpacity = handleOpacity.coerceIn(MIN_HANDLE_OPACITY, MAX_HANDLE_OPACITY)
     )
 
     companion object {
         const val DEFAULT_VERTICAL_RATIO = 0.62f
         const val MIN_VERTICAL_RATIO = 0.20f
         const val MAX_VERTICAL_RATIO = 0.80f
+        const val DEFAULT_HANDLE_OPACITY = 0.15f
+        const val MIN_HANDLE_OPACITY = 0.05f
+        const val MAX_HANDLE_OPACITY = 1f
     }
 }
 
@@ -40,6 +45,10 @@ class PwaSwitcherPreferences(context: Context) {
             verticalRatio = preferences.getFloat(
                 KEY_VERTICAL_RATIO,
                 SwitcherPlacement.DEFAULT_VERTICAL_RATIO
+            ),
+            handleOpacity = preferences.getFloat(
+                KEY_HANDLE_OPACITY,
+                SwitcherPlacement.DEFAULT_HANDLE_OPACITY
             )
         ).normalized()
     }
@@ -49,6 +58,7 @@ class PwaSwitcherPreferences(context: Context) {
         preferences.edit()
             .putString(KEY_SIDE, normalized.side.name)
             .putFloat(KEY_VERTICAL_RATIO, normalized.verticalRatio)
+            .putFloat(KEY_HANDLE_OPACITY, normalized.handleOpacity)
             .apply()
     }
 
@@ -79,6 +89,7 @@ class PwaSwitcherPreferences(context: Context) {
         private const val PREFERENCES_NAME = "pwa_switcher"
         private const val KEY_SIDE = "side"
         private const val KEY_VERTICAL_RATIO = "vertical_ratio"
+        private const val KEY_HANDLE_OPACITY = "handle_opacity"
         private const val KEY_RECENT_PWA_IDS = "recent_pwa_ids"
     }
 }

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -69,10 +70,37 @@ import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
 
+private sealed interface HomeGridItem {
+    val stableKey: Any
+
+    data class Pwa(val value: PwaEntity) : HomeGridItem {
+        override val stableKey: Any = value.id
+    }
+
+    data object Settings : HomeGridItem {
+        override val stableKey: Any = "netnest_system_settings"
+    }
+}
+
+private fun buildHomeGridItems(
+    pwas: List<PwaEntity>,
+    settingsTileIndex: Int
+): List<HomeGridItem> {
+    val result = pwas.mapTo(mutableListOf<HomeGridItem>()) { HomeGridItem.Pwa(it) }
+    result.add(
+        normalizeSettingsTileIndex(settingsTileIndex, pwas.size),
+        HomeGridItem.Settings
+    )
+    return result
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
+    settingsTileIndex: Int,
+    onSettingsTileIndexChanged: (Int) -> Unit,
+    onSettingsClick: () -> Unit,
     onPwaClick: (PwaEntity) -> Unit,
     onPwaUpdate: (previous: PwaEntity, updated: PwaEntity) -> Unit,
     onPwaDelete: (PwaEntity) -> Unit,
@@ -83,22 +111,33 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsState()
     val homeScope = rememberCoroutineScope()
     val gridState = rememberLazyGridState()
-    var displayedPwas by remember { mutableStateOf<List<PwaEntity>>(emptyList()) }
-    var dragStartOrder by remember { mutableStateOf<List<PwaEntity>>(emptyList()) }
-    var draggedPwaId by remember { mutableStateOf<Long?>(null) }
+    var displayedItems by remember { mutableStateOf<List<HomeGridItem>>(emptyList()) }
+    var dragStartOrder by remember { mutableStateOf<List<HomeGridItem>>(emptyList()) }
+    var draggedItemKey by remember { mutableStateOf<Any?>(null) }
     var draggedCenter by remember { mutableStateOf(Offset.Zero) }
     var dragInMotion by remember { mutableStateOf(false) }
     val autoScrollEdge = with(LocalDensity.current) { 72.dp.toPx() }
 
-    LaunchedEffect(pwas) {
-        if (draggedPwaId == null) displayedPwas = pwas
+    LaunchedEffect(pwas, settingsTileIndex) {
+        if (draggedItemKey == null) {
+            displayedItems = buildHomeGridItems(pwas, settingsTileIndex)
+        }
     }
 
-    fun moveDraggedPwaTo(position: Offset) {
-        val draggedIndex = displayedPwas.indexOfFirst { it.id == draggedPwaId }
+    fun persistHomeOrder(items: List<HomeGridItem>) {
+        val reorderedPwas = items.mapNotNull { (it as? HomeGridItem.Pwa)?.value }
+        val newSettingsIndex = items.indexOf(HomeGridItem.Settings)
+            .coerceAtLeast(0)
+            .coerceAtMost(reorderedPwas.size)
+        onSettingsTileIndexChanged(newSettingsIndex)
+        viewModel.reorderPwas(reorderedPwas)
+    }
+
+    fun moveDraggedItemTo(position: Offset) {
+        val draggedIndex = displayedItems.indexOfFirst { it.stableKey == draggedItemKey }
         val targetIndex = gridState.layoutInfo.visibleItemsInfo
             .firstOrNull { item ->
-                item.index < displayedPwas.size &&
+                item.index < displayedItems.size &&
                     position.x >= item.offset.x &&
                     position.x <= item.offset.x + item.size.width &&
                     position.y >= item.offset.y &&
@@ -106,12 +145,12 @@ fun HomeScreen(
             }
             ?.index
         if (draggedIndex >= 0 && targetIndex != null && draggedIndex != targetIndex) {
-            displayedPwas = moveListItem(displayedPwas, draggedIndex, targetIndex)
+            displayedItems = moveListItem(displayedItems, draggedIndex, targetIndex)
         }
     }
 
-    LaunchedEffect(draggedPwaId) {
-        while (draggedPwaId != null) {
+    LaunchedEffect(draggedItemKey) {
+        while (draggedItemKey != null) {
             val layoutInfo = gridState.layoutInfo
             val scrollAmount = when {
                 !dragInMotion -> 0f
@@ -121,7 +160,7 @@ fun HomeScreen(
             }
             if (scrollAmount != 0f) {
                 gridState.scrollBy(scrollAmount)
-                moveDraggedPwaTo(draggedCenter)
+                moveDraggedItemTo(draggedCenter)
             }
             withFrameNanos { }
         }
@@ -154,7 +193,7 @@ fun HomeScreen(
                 Icon(Icons.Default.Add, contentDescription = "添加 PWA")
             }
         },
-        containerColor = Color(0xFFF5F5F3), // Light neutral warm-gray background
+        containerColor = MaterialTheme.colorScheme.background,
         modifier = modifier
     ) { paddingValues ->
         Box(
@@ -162,33 +201,7 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            if (pwas.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "还没有添加网页应用。\n点击 '+' 创建您的专属网络桌面！",
-                        textAlign = TextAlign.Center,
-                        color = Color(0xFF7D7A76),
-                        fontSize = 14.sp,
-                        lineHeight = 22.sp
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 24.dp),
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    Text(
-                        text = "NetNest v${getAppVersionName(context)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray.copy(alpha = 0.6f)
-                    )
-                }
-            } else {
-                LazyVerticalGrid(
+            LazyVerticalGrid(
                     columns = GridCells.Fixed(4), // 4 columns per row
                     state = gridState,
                     modifier = Modifier
@@ -197,10 +210,15 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
-                    itemsIndexed(displayedPwas, key = { _, pwa -> pwa.id }) { index, pwa ->
+                    itemsIndexed(
+                        displayedItems,
+                        key = { _, item -> item.stableKey }
+                    ) { index, item ->
                         val itemInfo = gridState.layoutInfo.visibleItemsInfo
-                            .firstOrNull { it.key == pwa.id }
-                        val dragTranslation = if (draggedPwaId == pwa.id && itemInfo != null) {
+                            .firstOrNull { it.key == item.stableKey }
+                        val dragTranslation = if (
+                            draggedItemKey == item.stableKey && itemInfo != null
+                        ) {
                             draggedCenter - Offset(
                                 itemInfo.offset.x + itemInfo.size.width / 2f,
                                 itemInfo.offset.y + itemInfo.size.height / 2f
@@ -208,81 +226,134 @@ fun HomeScreen(
                         } else {
                             Offset.Zero
                         }
-                        PwaGridItem(
-                            pwa = pwa,
-                            index = index,
-                            totalItems = displayedPwas.size,
-                            imageLoader = imageLoader,
-                            modifier = if (draggedPwaId == pwa.id) {
-                                Modifier
-                            } else {
-                                Modifier.animateItemPlacement()
-                            },
-                            isDragging = draggedPwaId == pwa.id,
-                            dragTranslation = dragTranslation,
-                            onClick = { onPwaClick(pwa) },
-                            onDelete = { showDeleteConfirmDialog = pwa },
-                            onEdit = { showEditDialog = pwa },
-                            onAddToHomeScreen = {
-                                homeScope.launch {
-                                    val message = when (
-                                        requestPinnedPwaShortcut(context.applicationContext, pwa)
-                                    ) {
-                                        PinPwaShortcutResult.REQUESTED ->
-                                            "请在系统弹窗中确认添加到桌面"
-                                        PinPwaShortcutResult.ALREADY_PINNED ->
-                                            "桌面图标已存在，并已更新"
-                                        PinPwaShortcutResult.UNSUPPORTED ->
-                                            "当前桌面启动器不支持添加图标"
-                                        PinPwaShortcutResult.FAILED ->
-                                            "无法请求添加桌面图标"
-                                    }
-                                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                                }
-                            },
-                            onMove = { direction ->
-                                val targetIndex = index + direction
-                                if (targetIndex in displayedPwas.indices) {
-                                    val reordered = moveListItem(displayedPwas, index, targetIndex)
-                                    displayedPwas = reordered
-                                    viewModel.reorderPwas(reordered)
-                                }
-                            },
-                            onDragStart = {
-                                val info = gridState.layoutInfo.visibleItemsInfo
-                                    .firstOrNull { it.key == pwa.id }
-                                if (info != null) {
-                                    dragStartOrder = displayedPwas
-                                    draggedPwaId = pwa.id
-                                    dragInMotion = false
-                                    draggedCenter = Offset(
-                                        info.offset.x + info.size.width / 2f,
-                                        info.offset.y + info.size.height / 2f
-                                    )
-                                }
-                            },
-                            onDrag = { delta ->
-                                dragInMotion = true
-                                draggedCenter += delta
-                                moveDraggedPwaTo(draggedCenter)
-                            },
-                            onDragEnd = { moved ->
-                                if (
-                                    moved &&
-                                    displayedPwas.map(PwaEntity::id) !=
-                                    dragStartOrder.map(PwaEntity::id)
-                                ) {
-                                    viewModel.reorderPwas(displayedPwas)
-                                }
-                                dragInMotion = false
-                                draggedPwaId = null
-                            },
-                            onDragCancel = {
-                                displayedPwas = dragStartOrder
-                                dragInMotion = false
-                                draggedPwaId = null
+                        val itemModifier = if (draggedItemKey == item.stableKey) {
+                            Modifier
+                        } else {
+                            Modifier.animateItemPlacement()
+                        }
+                        fun moveItem(direction: Int) {
+                            val targetIndex = index + direction
+                            if (targetIndex in displayedItems.indices) {
+                                val reordered = moveListItem(
+                                    displayedItems,
+                                    index,
+                                    targetIndex
+                                )
+                                displayedItems = reordered
+                                persistHomeOrder(reordered)
                             }
-                        )
+                        }
+                        fun beginDrag() {
+                            val info = gridState.layoutInfo.visibleItemsInfo
+                                .firstOrNull { it.key == item.stableKey }
+                            if (info != null) {
+                                dragStartOrder = displayedItems
+                                draggedItemKey = item.stableKey
+                                dragInMotion = false
+                                draggedCenter = Offset(
+                                    info.offset.x + info.size.width / 2f,
+                                    info.offset.y + info.size.height / 2f
+                                )
+                            }
+                        }
+                        fun dragBy(delta: Offset) {
+                            dragInMotion = true
+                            draggedCenter += delta
+                            moveDraggedItemTo(draggedCenter)
+                        }
+                        fun endDrag(moved: Boolean) {
+                            if (moved && displayedItems != dragStartOrder) {
+                                persistHomeOrder(displayedItems)
+                            }
+                            dragInMotion = false
+                            draggedItemKey = null
+                        }
+                        fun cancelDrag() {
+                            displayedItems = dragStartOrder
+                            dragInMotion = false
+                            draggedItemKey = null
+                        }
+
+                        when (item) {
+                            is HomeGridItem.Pwa -> {
+                                val pwa = item.value
+                                PwaGridItem(
+                                    pwa = pwa,
+                                    index = index,
+                                    totalItems = displayedItems.size,
+                                    imageLoader = imageLoader,
+                                    modifier = itemModifier,
+                                    isDragging = draggedItemKey == item.stableKey,
+                                    dragTranslation = dragTranslation,
+                                    onClick = { onPwaClick(pwa) },
+                                    onDelete = { showDeleteConfirmDialog = pwa },
+                                    onEdit = { showEditDialog = pwa },
+                                    onAddToHomeScreen = {
+                                        homeScope.launch {
+                                            val message = when (
+                                                requestPinnedPwaShortcut(
+                                                    context.applicationContext,
+                                                    pwa
+                                                )
+                                            ) {
+                                                PinPwaShortcutResult.REQUESTED ->
+                                                    "请在系统弹窗中确认添加到桌面"
+                                                PinPwaShortcutResult.ALREADY_PINNED ->
+                                                    "桌面图标已存在，并已更新"
+                                                PinPwaShortcutResult.UNSUPPORTED ->
+                                                    "当前桌面启动器不支持添加图标"
+                                                PinPwaShortcutResult.FAILED ->
+                                                    "无法请求添加桌面图标"
+                                            }
+                                            Toast.makeText(
+                                                context,
+                                                message,
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    },
+                                    onMove = ::moveItem,
+                                    onDragStart = ::beginDrag,
+                                    onDrag = ::dragBy,
+                                    onDragEnd = ::endDrag,
+                                    onDragCancel = ::cancelDrag
+                                )
+                            }
+                            HomeGridItem.Settings -> {
+                                SettingsGridItem(
+                                    index = index,
+                                    totalItems = displayedItems.size,
+                                    modifier = itemModifier,
+                                    isDragging = draggedItemKey == item.stableKey,
+                                    dragTranslation = dragTranslation,
+                                    onClick = onSettingsClick,
+                                    onMove = ::moveItem,
+                                    onDragStart = ::beginDrag,
+                                    onDrag = ::dragBy,
+                                    onDragEnd = ::endDrag,
+                                    onDragCancel = ::cancelDrag
+                                )
+                            }
+                        }
+                    }
+
+                    if (pwas.isEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "还没有添加网页应用。\n点击“+”创建您的专属网络桌面！",
+                                    textAlign = TextAlign.Center,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 14.sp,
+                                    lineHeight = 22.sp
+                                )
+                            }
+                        }
                     }
 
                     item(span = { GridItemSpan(maxLineSpan) }) {
@@ -295,12 +366,13 @@ fun HomeScreen(
                             Text(
                                 text = "NetNest v${getAppVersionName(context)}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color.Gray.copy(alpha = 0.6f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                                    alpha = 0.65f
+                                )
                             )
                         }
                     }
                 }
-            }
 
             // Global UI state overlays
             when (val state = uiState) {
@@ -522,7 +594,7 @@ fun PwaGridItem(
                     },
                     onDragEnd = {
                         latestOnDragEnd(dragGate.isDragging)
-                        if (!dragGate.isDragging) expanded = true
+                        if (!dragGate.isDragging && totalItems > 1) expanded = true
                     },
                     onDragCancel = {
                         dragGate.reset()
@@ -583,7 +655,7 @@ fun PwaGridItem(
             text = pwa.name,
             fontSize = 12.sp,
             fontWeight = FontWeight.Normal,
-            color = Color(0xFF333333),
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
@@ -670,6 +742,168 @@ fun PwaGridItem(
                         onDelete()
                     }
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SettingsGridItem(
+    index: Int,
+    totalItems: Int,
+    modifier: Modifier = Modifier,
+    isDragging: Boolean,
+    dragTranslation: Offset,
+    onClick: () -> Unit,
+    onMove: (Int) -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: (Boolean) -> Unit,
+    onDragCancel: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val iconShape = RoundedCornerShape(20.dp)
+    val hapticFeedback = LocalHapticFeedback.current
+    val dragTouchSlop = LocalViewConfiguration.current.touchSlop
+    val latestOnDragStart by rememberUpdatedState(onDragStart)
+    val latestOnDrag by rememberUpdatedState(onDrag)
+    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
+    val latestOnDragCancel by rememberUpdatedState(onDragCancel)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                translationX = dragTranslation.x
+                translationY = dragTranslation.y
+                scaleX = if (isDragging) 1.08f else 1f
+                scaleY = if (isDragging) 1.08f else 1f
+            }
+            .pointerInput(dragTouchSlop) {
+                val dragGate = LongPressDragGate(dragTouchSlop)
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        dragGate.reset()
+                        expanded = false
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        latestOnDragStart()
+                    },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragGate.track(amount)?.let(latestOnDrag)
+                    },
+                    onDragEnd = {
+                        latestOnDragEnd(dragGate.isDragging)
+                        if (!dragGate.isDragging && totalItems > 1) expanded = true
+                    },
+                    onDragCancel = {
+                        dragGate.reset()
+                        latestOnDragCancel()
+                    }
+                )
+            }
+            .semantics {
+                onLongClick(label = "移动设置") {
+                    if (totalItems > 1) {
+                        expanded = true
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+            .clickable(enabled = !isDragging, onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .shadow(
+                    elevation = if (isDragging) 12.dp else 0.dp,
+                    shape = iconShape,
+                    clip = false
+                )
+                .clip(iconShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = null,
+                modifier = Modifier.size(34.dp),
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = "设置",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 2.dp)
+        )
+
+        Box(modifier = Modifier.size(0.dp)) {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                offset = DpOffset(x = (-30).dp, y = (-20).dp),
+                modifier = Modifier
+                    .width(232.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+            ) {
+                Text(
+                    text = "设置",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                )
+                if (index > 0) {
+                    DropdownMenuItem(
+                        text = { Text("向左移动") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier
+                            .padding(horizontal = 8.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        onClick = {
+                            expanded = false
+                            onMove(-1)
+                        }
+                    )
+                }
+                if (index < totalItems - 1) {
+                    DropdownMenuItem(
+                        text = { Text("向右移动") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null
+                            )
+                        },
+                        modifier = Modifier
+                            .padding(horizontal = 8.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        onClick = {
+                            expanded = false
+                            onMove(1)
+                        }
+                    )
+                }
             }
         }
     }
@@ -894,7 +1128,11 @@ private fun ManualAddDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                         Text("标准 Chrome User-Agent", style = MaterialTheme.typography.bodyMedium)
-                        Text("移除 '; wv' 以防止功能退化。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text(
+                            "移除 '; wv' 以防止功能退化。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     Switch(
                         checked = useChromeUa,
@@ -908,7 +1146,11 @@ private fun ManualAddDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                         Text("应用内开发者控制台", style = MaterialTheme.typography.bodyMedium)
-                        Text("注入 vConsole 以在应用内调试控制台和存储。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text(
+                            "注入 vConsole 以在应用内调试控制台和存储。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     Switch(
                         checked = useDevConsole,
@@ -922,7 +1164,11 @@ private fun ManualAddDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                         Text("全屏隐藏状态栏", style = MaterialTheme.typography.bodyMedium)
-                        Text("进入该 PWA 后完全隐藏系统通知栏/状态栏。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text(
+                            "进入该 PWA 后完全隐藏系统通知栏/状态栏。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     Switch(
                         checked = useFullscreen,
@@ -936,7 +1182,11 @@ private fun ManualAddDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                         Text("隐私数据上传拦截", style = MaterialTheme.typography.bodyMedium)
-                        Text("阻止网页静默上传聊天记录或API密钥，并弹窗警告。", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text(
+                            "阻止网页静默上传聊天记录或API密钥，并弹窗警告。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     Switch(
                         checked = isSecurityShieldEnabled,

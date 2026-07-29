@@ -45,6 +45,20 @@ class AppUpdateChecker(context: Context) {
         return latest?.takeIf { shouldShow(it, currentVersion, now) }
     }
 
+    /**
+     * User-initiated checks always contact GitHub and ignore the automatic
+     * reminder's interval and snooze state.
+     */
+    suspend fun checkNow(currentVersion: String): Result<AppUpdateInfo?> {
+        return fetchLatestRelease().map { latest ->
+            preferences.edit()
+                .putLong(KEY_LAST_CHECK, System.currentTimeMillis())
+                .apply()
+            saveCached(latest)
+            latest.takeIf { isNewerVersion(currentVersion, it.versionName) }
+        }
+    }
+
     fun snooze(versionName: String) {
         preferences.edit()
             .putString(KEY_SNOOZED_VERSION, versionName)
