@@ -3,9 +3,14 @@ package com.pwa.shell.ui
 import java.util.UUID
 
 internal enum class PwaWebProfileMode {
-    LEGACY_SHARED,
+    SHARED,
     ISOLATED,
     COMPATIBILITY_SHARED
+}
+
+enum class PwaDataSpace {
+    SHARED,
+    ISOLATED
 }
 
 internal data class ResolvedPwaWebProfile(
@@ -16,12 +21,18 @@ internal data class ResolvedPwaWebProfile(
 internal fun newPwaWebProfileId(): String =
     "netnest_pwa_${UUID.randomUUID().toString().replace("-", "")}"
 
+internal fun webProfileIdFor(dataSpace: PwaDataSpace): String? =
+    when (dataSpace) {
+        PwaDataSpace.SHARED -> null
+        PwaDataSpace.ISOLATED -> newPwaWebProfileId()
+    }
+
 internal fun resolvePwaWebProfile(
     profileName: String?,
     multiProfileSupported: Boolean
 ): ResolvedPwaWebProfile {
     if (profileName.isNullOrBlank()) {
-        return ResolvedPwaWebProfile(PwaWebProfileMode.LEGACY_SHARED)
+        return ResolvedPwaWebProfile(PwaWebProfileMode.SHARED)
     }
     return if (multiProfileSupported) {
         ResolvedPwaWebProfile(PwaWebProfileMode.ISOLATED, profileName)

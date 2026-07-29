@@ -8,6 +8,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -72,6 +74,8 @@ import kotlin.math.abs
 fun HomeScreen(
     viewModel: MainViewModel,
     onPwaClick: (PwaEntity) -> Unit,
+    onPwaUpdate: (previous: PwaEntity, updated: PwaEntity) -> Unit,
+    onPwaDelete: (PwaEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -125,7 +129,7 @@ fun HomeScreen(
 
     var showAddDialog by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf<PwaEntity?>(null) }
-    var showManualAddDialog by remember { mutableStateOf<String?>(null) }
+    var showManualAddDialog by remember { mutableStateOf<UiState.Error?>(null) }
     var showDeleteConfirmDialog by remember { mutableStateOf<PwaEntity?>(null) }
 
     // Configure Coil ImageLoader with SVG support
@@ -327,7 +331,7 @@ fun HomeScreen(
                         confirmButton = {
                             TextButton(onClick = {
                                 viewModel.resetState()
-                                showManualAddDialog = state.fallbackUrl
+                                showManualAddDialog = state
                             }) {
                                 Text("手动添加")
                             }
@@ -348,21 +352,33 @@ fun HomeScreen(
             if (showAddDialog) {
                 AddPwaDialog(
                     onDismiss = { showAddDialog = false },
-                    onConfirm = { url ->
+                    onConfirm = { url, dataSpace ->
                         showAddDialog = false
-                        viewModel.addPwa(url, context)
+                        viewModel.addPwa(url, context, dataSpace)
                     }
                 )
             }
 
             // Manual Add Dialog
-            showManualAddDialog?.let { failedUrl ->
+            showManualAddDialog?.let { request ->
                 ManualAddDialog(
-                    initialUrl = failedUrl,
+                    initialUrl = request.fallbackUrl,
+                    initialDataSpace = request.dataSpace,
                     onDismiss = { showManualAddDialog = null },
-                    onConfirm = { name, url, theme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains ->
+                    onConfirm = { name, url, theme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains, dataSpace ->
                         showManualAddDialog = null
-                        viewModel.addPwaManually(name, url, "", theme, useChromeUa, useDevConsole, useFullscreen, securityMode, trustedDomains)
+                        viewModel.addPwaManually(
+                            name,
+                            url,
+                            "",
+                            theme,
+                            useChromeUa,
+                            useDevConsole,
+                            useFullscreen,
+                            securityMode,
+                            trustedDomains,
+                            dataSpace
+                        )
                     }
                 )
             }
@@ -374,9 +390,9 @@ fun HomeScreen(
                 EditPwaDialog(
                     pwa = pwa,
                     onDismiss = { showEditDialog = null },
-                    onConfirm = { updatedName, updatedUrl, updatedIconPath, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, securityPromptEnabled, trustedDomains, customUserAgent, customLanguage, customPlatform, screenWidth, screenHeight, deviceScaleFactor ->
+                    onConfirm = { updatedName, updatedUrl, updatedIconPath, updatedTheme, useChromeUa, useDevConsole, useFullscreen, securityMode, securityPromptEnabled, trustedDomains, customUserAgent, customLanguage, customPlatform, screenWidth, screenHeight, deviceScaleFactor, showSwitcherHandle ->
                         showEditDialog = null
-                        viewModel.updatePwa(pwa.copy(
+                        onPwaUpdate(pwa, pwa.copy(
                             name = updatedName,
                             url = updatedUrl,
                             iconPath = updatedIconPath,
@@ -392,7 +408,8 @@ fun HomeScreen(
                             customPlatform = customPlatform,
                             screenWidth = screenWidth,
                             screenHeight = screenHeight,
-                            deviceScaleFactor = deviceScaleFactor
+                            deviceScaleFactor = deviceScaleFactor,
+                            showSwitcherHandle = showSwitcherHandle
                         ))
                     },
                     onReloadWebsiteIcon = { editedUrl ->
@@ -417,7 +434,7 @@ fun HomeScreen(
             showDeleteConfirmDialog?.let { pwa ->
                 val deletionMessage = when {
                     pwa.webProfileId == null ->
-                        "您将删除网页应用“${pwa.name}”。这是旧版共享数据应用；为避免影响其他 PWA，共享 Cookie 和网页存储不会随单个应用删除。图标、脚本、通知和应用配置会被清理。"
+                        "您将删除网页应用“${pwa.name}”。该应用使用共享数据空间；为避免影响其他共享 PWA，Cookie 和网页存储不会随单个应用删除。图标、脚本、通知和应用配置会被清理。"
                     pwa.usedSharedCompatibility ->
                         "您将删除网页应用“${pwa.name}”及其独立数据空间。此前共享兼容模式中产生的数据无法安全归属，将保留在旧共享空间中；其他独立 PWA 不受影响。"
                     else ->
@@ -430,7 +447,7 @@ fun HomeScreen(
                     confirmButton = {
                         TextButton(
                             onClick = {
-                                viewModel.deletePwa(pwa)
+                                onPwaDelete(pwa)
                                 showDeleteConfirmDialog = null
                             }
                         ) {
@@ -659,12 +676,84 @@ fun PwaGridItem(
 }
 
 @Composable
-fun AddPwaDialog(
+private fun PwaDataSpaceSelector(
+    selected: PwaDataSpace,
+    onSelected: (PwaDataSpace) -> Unit
+) {
+    val isolationSupported = remember { PwaWebProfileManager.isMultiProfileSupported() }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("数据空间", style = MaterialTheme.typography.labelLarge)
+        PwaDataSpaceOption(
+            selected = selected == PwaDataSpace.SHARED,
+            title = "共享登录数据",
+            description = "多个共享 PWA 可共用登录状态；删除应用时网页数据会保留。",
+            onClick = { onSelected(PwaDataSpace.SHARED) }
+        )
+        PwaDataSpaceOption(
+            selected = selected == PwaDataSpace.ISOLATED,
+            title = "独立数据空间",
+            description = if (isolationSupported) {
+                "Cookie 和网页存储独立；删除应用时可完整清理。"
+            } else {
+                "当前 WebView 暂不支持，将先使用共享兼容模式并在支持后自动启用。"
+            },
+            onClick = { onSelected(PwaDataSpace.ISOLATED) }
+        )
+        Text(
+            "数据空间创建后不可直接切换。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun PwaDataSpaceOption(
+    selected: Boolean,
+    title: String,
+    description: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                }
+            )
+            .clickable(role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddPwaDialog(
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit
+    onConfirm: (String, PwaDataSpace) -> Unit
 ) {
     var url by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
+    var dataSpace by remember { mutableStateOf(PwaDataSpace.SHARED) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -672,7 +761,7 @@ fun AddPwaDialog(
             TextButton(
                 onClick = {
                     if (url.isNotBlank()) {
-                        onConfirm(url)
+                        onConfirm(url, dataSpace)
                     } else {
                         isError = true
                     }
@@ -688,7 +777,12 @@ fun AddPwaDialog(
         },
         title = { Text("添加新 PWA") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text("输入网站 URL。NetNest 将自动解析 PWA 清单。")
                 OutlinedTextField(
                     value = url,
@@ -705,16 +799,21 @@ fun AddPwaDialog(
                 if (isError) {
                     Text("URL 不能为空", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 }
+                PwaDataSpaceSelector(
+                    selected = dataSpace,
+                    onSelected = { dataSpace = it }
+                )
             }
         }
     )
 }
 
 @Composable
-fun ManualAddDialog(
+private fun ManualAddDialog(
     initialUrl: String,
+    initialDataSpace: PwaDataSpace,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String) -> Unit
+    onConfirm: (name: String, url: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, trustedDomains: String, dataSpace: PwaDataSpace) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf(initialUrl) }
@@ -724,6 +823,7 @@ fun ManualAddDialog(
     var useFullscreen by remember { mutableStateOf(false) }
     var isSecurityShieldEnabled by remember { mutableStateOf(true) }
     var trustedDomains by remember { mutableStateOf("") }
+    var dataSpace by remember(initialDataSpace) { mutableStateOf(initialDataSpace) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -739,7 +839,8 @@ fun ManualAddDialog(
                             useDevConsole,
                             useFullscreen,
                             if (isSecurityShieldEnabled) 1 else 0,
-                            trustedDomains
+                            trustedDomains,
+                            dataSpace
                         )
                     }
                 }
@@ -754,7 +855,12 @@ fun ManualAddDialog(
         },
         title = { Text("手动添加 PWA") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -768,6 +874,10 @@ fun ManualAddDialog(
                     label = { Text("网站 URL") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
+                )
+                PwaDataSpaceSelector(
+                    selected = dataSpace,
+                    onSelected = { dataSpace = it }
                 )
                 OutlinedTextField(
                     value = themeColor,
@@ -853,7 +963,7 @@ fun ManualAddDialog(
 fun EditPwaDialog(
     pwa: PwaEntity,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, iconPath: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, securityPromptEnabled: Boolean, trustedDomains: String, customUserAgent: String?, customLanguage: String, customPlatform: String, screenWidth: Int, screenHeight: Int, deviceScaleFactor: Float) -> Unit,
+    onConfirm: (name: String, url: String, iconPath: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int, securityPromptEnabled: Boolean, trustedDomains: String, customUserAgent: String?, customLanguage: String, customPlatform: String, screenWidth: Int, screenHeight: Int, deviceScaleFactor: Float, showSwitcherHandle: Boolean) -> Unit,
     onReloadWebsiteIcon: suspend (url: String) -> Result<String>,
     onManageScripts: () -> Unit
 ) {
@@ -883,6 +993,7 @@ fun EditPwaDialog(
     var screenWidth by remember { mutableStateOf(if (pwa.screenWidth > 0) pwa.screenWidth.toString() else "") }
     var screenHeight by remember { mutableStateOf(if (pwa.screenHeight > 0) pwa.screenHeight.toString() else "") }
     var deviceScaleFactor by remember { mutableStateOf(if (pwa.deviceScaleFactor > 0f) pwa.deviceScaleFactor.toString() else "") }
+    var showSwitcherHandle by remember { mutableStateOf(pwa.showSwitcherHandle) }
     var browserSectionExpanded by remember {
         mutableStateOf(
             !pwa.customUserAgent.isNullOrBlank() ||
@@ -960,7 +1071,8 @@ fun EditPwaDialog(
             customPlatform != pwa.customPlatform ||
             (screenWidth.toIntOrNull() ?: 0) != pwa.screenWidth ||
             (screenHeight.toIntOrNull() ?: 0) != pwa.screenHeight ||
-            (deviceScaleFactor.toFloatOrNull() ?: 0f) != pwa.deviceScaleFactor
+            (deviceScaleFactor.toFloatOrNull() ?: 0f) != pwa.deviceScaleFactor ||
+            showSwitcherHandle != pwa.showSwitcherHandle
 
     fun requestDismiss() {
         if (hasUnsavedChanges) {
@@ -993,7 +1105,8 @@ fun EditPwaDialog(
             customPlatform.trim(),
             screenWidth.toIntOrNull()?.coerceIn(0, 10000) ?: 0,
             screenHeight.toIntOrNull()?.coerceIn(0, 10000) ?: 0,
-            deviceScaleFactor.toFloatOrNull()?.coerceIn(0.1f, 8f) ?: 0f
+            deviceScaleFactor.toFloatOrNull()?.coerceIn(0.1f, 8f) ?: 0f,
+            showSwitcherHandle
         )
         onSaved?.invoke()
     }
@@ -1098,7 +1211,7 @@ fun EditPwaDialog(
                                 ) {
                                     Text(
                                         text = if (pwa.webProfileId == null) {
-                                            "数据空间：旧版共享"
+                                            "数据空间：共享"
                                         } else {
                                             "数据空间：独立配置"
                                         },
@@ -1106,7 +1219,7 @@ fun EditPwaDialog(
                                     )
                                     Text(
                                         text = if (pwa.webProfileId == null) {
-                                            "为保留升级前的登录状态，该应用继续使用共享网页数据。"
+                                            "Cookie 和网页本地数据可与其他共享 PWA 共用；删除应用时共享网页数据会保留。"
                                         } else {
                                             "支持时 Cookie 和网页本地数据与其他 PWA 隔离；不支持时会显示兼容提示。"
                                         },
@@ -1253,6 +1366,13 @@ fun EditPwaDialog(
                                 description = "进入应用后隐藏系统状态栏",
                                 checked = useFullscreen,
                                 onCheckedChange = { useFullscreen = it }
+                            )
+                            HorizontalDivider()
+                            EditorSwitchRow(
+                                title = "显示应用切换侧边条",
+                                description = "可随时打开最近应用或上下滑动快速切换",
+                                checked = showSwitcherHandle,
+                                onCheckedChange = { showSwitcherHandle = it }
                             )
                         }
                         }

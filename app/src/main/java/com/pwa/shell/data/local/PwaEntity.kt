@@ -26,13 +26,18 @@ data class PwaEntity(
     val screenHeight: Int = 0,
     val deviceScaleFactor: Float = 0f,
     /**
-     * Null is reserved for PWAs created before per-PWA WebView profiles existed.
-     * New PWAs receive an opaque profile name and must never share it.
+     * Null selects NetNest's shared WebView data space. An opaque profile name
+     * selects an isolated data space owned only by this PWA.
      */
     val webProfileId: String? = null,
     /**
      * Records that this isolated PWA has previously used the shared compatibility
      * profile because the installed WebView provider did not support multi-profile.
      */
-    val usedSharedCompatibility: Boolean = false
+    val usedSharedCompatibility: Boolean = false,
+    /**
+     * Per-PWA visual preference. The session manager remains available for deep
+     * links and shortcuts even when this app hides the switcher handle.
+     */
+    val showSwitcherHandle: Boolean = true
 )

@@ -3,6 +3,7 @@ package com.pwa.shell
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,25 +21,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.content.pm.ShortcutManagerCompat
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import com.pwa.shell.data.local.PwaEntity
 import com.pwa.shell.data.remote.AppUpdateChecker
 import com.pwa.shell.data.remote.AppUpdateInfo
-import com.pwa.shell.data.local.PwaEntity
-import com.pwa.shell.ui.HomeScreen
 import com.pwa.shell.ui.MainViewModel
-import com.pwa.shell.ui.PwaWebViewScreen
+import com.pwa.shell.ui.PwaActivationSource
+import com.pwa.shell.ui.PwaExternalLaunch
+import com.pwa.shell.ui.PwaSessionHost
 import com.pwa.shell.ui.getAppVersionName
 import com.pwa.shell.ui.pwaShortcutId
 import com.pwa.shell.ui.theme.NetNestTheme
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 
 class MainActivity : ComponentActivity() {
     private val pwaLaunchTargets = MutableStateFlow<PwaLaunch?>(null)
+    private val memoryPressureSignals = MutableStateFlow(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,93 +55,70 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
                     var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+                    var isHomeVisible by remember { mutableStateOf(true) }
                     val updateChecker = remember { AppUpdateChecker(applicationContext) }
                     val currentAppVersion = remember {
                         getAppVersionName(applicationContext)
                     }
+                    val pwas by produceState<List<PwaEntity>?>(
+                        initialValue = null,
+                        key1 = viewModel
+                    ) {
+                        viewModel.pwaList.collect { value = it }
+                    }
+                    val launchTarget by pwaLaunchTargets.collectAsState()
+                    val memoryPressureSignal by memoryPressureSignals.collectAsState()
 
                     LaunchedEffect(updateChecker) {
                         availableUpdate = updateChecker.check(currentAppVersion)
                     }
 
-                    LaunchedEffect(viewModel) {
-                        pwaLaunchTargets.filterNotNull().collect { target ->
-                            val pwa = viewModel.pwaList.first()
-                                .firstOrNull { it.id == target.pwaId }
-                            if (pwa != null) {
-                                if (target.fromShortcut) {
-                                    runCatching {
-                                        ShortcutManagerCompat.reportShortcutUsed(
-                                            applicationContext,
-                                            pwaShortcutId(pwa.id)
-                                        )
+                    pwas?.let { loadedPwas ->
+                        PwaSessionHost(
+                            viewModel = viewModel,
+                            pwas = loadedPwas,
+                            externalLaunch = launchTarget?.let { target ->
+                                PwaExternalLaunch(
+                                    pwaId = target.pwaId,
+                                    notificationId = target.notificationId,
+                                    source = if (target.fromShortcut) {
+                                        PwaActivationSource.SHORTCUT
+                                    } else {
+                                        PwaActivationSource.NOTIFICATION
                                     }
-                                }
-                                currentScreen = Screen.WebView(
-                                    pwa = pwa,
-                                    notificationId = target.notificationId
                                 )
-                            } else if (target.fromShortcut) {
-                                currentScreen = Screen.Home
+                            },
+                            onExternalLaunchConsumed = {
+                                launchTarget
+                                    ?.takeIf { it.fromShortcut }
+                                    ?.let { target ->
+                                        loadedPwas.firstOrNull { it.id == target.pwaId }
+                                            ?.let { pwa ->
+                                                runCatching {
+                                                    ShortcutManagerCompat.reportShortcutUsed(
+                                                        applicationContext,
+                                                        pwaShortcutId(pwa.id)
+                                                    )
+                                                }
+                                            }
+                                    }
+                                pwaLaunchTargets.value = null
+                            },
+                            memoryPressureSignal = memoryPressureSignal,
+                            onHomeVisibilityChanged = { isHomeVisible = it },
+                            onShortcutMissing = {
                                 Toast.makeText(
                                     applicationContext,
                                     "该网页应用已被删除",
                                     Toast.LENGTH_LONG
                                 ).show()
-                            }
-                            pwaLaunchTargets.value = null
-                        }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
 
-                    when (val screen = currentScreen) {
-                        is Screen.Home -> {
-                            // Apply status bars padding globally in MainActivity to avoid top overlap
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .windowInsetsPadding(WindowInsets.statusBars)
-                            ) {
-                                HomeScreen(
-                                    viewModel = viewModel,
-                                    onPwaClick = { pwa ->
-                                        currentScreen = Screen.WebView(pwa)
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        }
-                        is Screen.WebView -> {
-                            key(screen.pwa.id) {
-                                PwaWebViewScreen(
-                                    pwa = screen.pwa,
-                                    notificationClickId = screen.notificationId,
-                                    onNotificationClickConsumed = {
-                                        currentScreen = screen.copy(notificationId = null)
-                                    },
-                                    onBackToHome = {
-                                        currentScreen = Screen.Home
-                                    },
-                                    onUpdatePwa = { updatedPwa ->
-                                        viewModel.updatePwa(updatedPwa)
-                                    },
-                                    onCompatibilityFallbackUsed = { pwaId ->
-                                        viewModel.setUsedSharedCompatibility(pwaId, true)
-                                    },
-                                    onIsolationActivationAcknowledged = { pwaId ->
-                                        viewModel.setUsedSharedCompatibility(pwaId, false)
-                                    },
-                                    onWebViewDisposed = {
-                                        viewModel.retryPendingWebProfileDeletions()
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        }
-                    }
-
-                    if (currentScreen is Screen.Home) {
+                    if (isHomeVisible) {
                         availableUpdate?.let { update ->
                             AppUpdateDialog(
                                 update = update,
@@ -192,6 +167,17 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         pwaLaunchTargets.value = pwaLaunch(intent)
         consumePwaLaunchIntent()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        val underPressure =
+            level == TRIM_MEMORY_RUNNING_LOW ||
+                level == TRIM_MEMORY_RUNNING_CRITICAL ||
+                level >= TRIM_MEMORY_BACKGROUND
+        if (underPressure) {
+            memoryPressureSignals.value = SystemClock.elapsedRealtime()
+        }
     }
 
     private fun pwaLaunch(intent: Intent?): PwaLaunch? {
@@ -282,11 +268,3 @@ private data class PwaLaunch(
     val notificationId: String?,
     val fromShortcut: Boolean
 )
-
-sealed interface Screen {
-    object Home : Screen
-    data class WebView(
-        val pwa: PwaEntity,
-        val notificationId: String? = null
-    ) : Screen
-}

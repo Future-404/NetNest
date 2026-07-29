@@ -144,18 +144,24 @@ internal class NotificationRateLimiter(
 
 internal class PwaNotificationBridge(
     private val context: Context,
-    private val pwa: PwaEntity,
+    pwa: PwaEntity,
     capabilityToken: String,
     private val permissionStore: PwaNotificationPermissionStore,
     private val evaluateJavascript: (String) -> Unit,
     private val onPermissionRequested: (PwaNotificationPermissionRequest) -> Unit
 ) {
+    @Volatile private var pwa: PwaEntity = pwa
     private val capabilityTokenBytes = capabilityToken.toByteArray(Charsets.UTF_8)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val rateLimiter = NotificationRateLimiter()
     private val ownedNotificationIds = mutableSetOf<Int>()
     private val permissionRequestInFlight = AtomicBoolean(false)
     @Volatile private var nextPermissionPromptAt = 0L
+
+    fun updatePwa(updated: PwaEntity) {
+        require(updated.id == pwa.id) { "Cannot move notification bridge between PWAs" }
+        pwa = updated
+    }
 
     @JavascriptInterface
     fun getPermission(token: String, sourceUrl: String): String {

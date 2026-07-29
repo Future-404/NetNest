@@ -1,7 +1,9 @@
 package com.pwa.shell.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowserDownloadTest {
@@ -51,5 +53,21 @@ class BrowserDownloadTest {
             "session=profile-aInjected: value",
             sanitizeHeaderValue("session=profile-a\r\nInjected: value")
         )
+    }
+
+    @Test
+    fun `retains page generated blobs until the user confirms the download`() {
+        val script = buildWebDataDownloadSupportJs("\"test-token\"")
+
+        assertTrue(script.contains("objectUrlBlobs.set(url, value)"))
+        assertTrue(script.contains("blob: sourceBlob"))
+        assertTrue(script.contains("pending.blob"))
+    }
+
+    @Test
+    fun `does not revoke blob urls owned by the page`() {
+        val script = buildWebDataDownloadSupportJs("\"test-token\"")
+
+        assertFalse(script.contains("URL.revokeObjectURL(downloadUrl)"))
     }
 }

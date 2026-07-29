@@ -7,11 +7,26 @@ import org.junit.Test
 
 class WebProfilePolicyTest {
     @Test
-    fun `legacy PWA always remains on shared profile`() {
+    fun `shared PWA always remains on the global profile`() {
         val resolved = resolvePwaWebProfile(null, multiProfileSupported = true)
 
-        assertEquals(PwaWebProfileMode.LEGACY_SHARED, resolved.mode)
+        assertEquals(PwaWebProfileMode.SHARED, resolved.mode)
         assertNull(resolved.profileName)
+    }
+
+    @Test
+    fun `shared data space does not allocate an isolated profile`() {
+        assertNull(webProfileIdFor(PwaDataSpace.SHARED))
+    }
+
+    @Test
+    fun `isolated data space allocates a unique profile`() {
+        val first = webProfileIdFor(PwaDataSpace.ISOLATED)
+        val second = webProfileIdFor(PwaDataSpace.ISOLATED)
+
+        assertTrue(requireNotNull(first).startsWith("netnest_pwa_"))
+        assertTrue(first.matches(Regex("[a-z0-9_]+")))
+        assertTrue(first != second)
     }
 
     @Test

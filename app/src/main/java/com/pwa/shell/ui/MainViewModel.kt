@@ -41,7 +41,11 @@ class MainViewModel(context: Context) : ViewModel() {
         retryPendingWebProfileDeletions()
     }
 
-    fun addPwa(url: String, context: Context) {
+    fun addPwa(
+        url: String,
+        context: Context,
+        dataSpace: PwaDataSpace = PwaDataSpace.SHARED
+    ) {
         viewModelScope.launch {
             _uiState.value = UiState.Loading("正在获取 PWA 元数据...")
             try {
@@ -55,20 +59,32 @@ class MainViewModel(context: Context) : ViewModel() {
                     themeColor = result.themeColor,
                     displayOrder = 0,
                     addedTime = System.currentTimeMillis(),
-                    webProfileId = newPwaWebProfileId()
+                    webProfileId = webProfileIdFor(dataSpace)
                 )
                 pwaDao.insert(pwaEntity)
                 _uiState.value = UiState.Success("PWA 添加成功")
             } catch (e: Exception) {
                 _uiState.value = UiState.Error(
                     message = e.localizedMessage ?: "获取元数据失败",
-                    fallbackUrl = url
+                    fallbackUrl = url,
+                    dataSpace = dataSpace
                 )
             }
         }
     }
 
-    fun addPwaManually(name: String, url: String, iconPath: String, themeColor: String?, useChromeUa: Boolean, useDevConsole: Boolean, useFullscreen: Boolean, securityMode: Int = 1, trustedDomains: String = "") {
+    fun addPwaManually(
+        name: String,
+        url: String,
+        iconPath: String,
+        themeColor: String?,
+        useChromeUa: Boolean,
+        useDevConsole: Boolean,
+        useFullscreen: Boolean,
+        securityMode: Int = 1,
+        trustedDomains: String = "",
+        dataSpace: PwaDataSpace = PwaDataSpace.SHARED
+    ) {
         viewModelScope.launch {
             val pwaEntity = PwaEntity(
                 name = name,
@@ -82,7 +98,7 @@ class MainViewModel(context: Context) : ViewModel() {
                 useFullscreen = useFullscreen,
                 securityMode = securityMode,
                 trustedDomains = trustedDomains,
-                webProfileId = newPwaWebProfileId()
+                webProfileId = webProfileIdFor(dataSpace)
             )
             pwaDao.insert(pwaEntity)
             _uiState.value = UiState.Success("PWA 手动添加成功")
@@ -218,5 +234,9 @@ sealed interface UiState {
     object Idle : UiState
     data class Loading(val message: String) : UiState
     data class Success(val message: String) : UiState
-    data class Error(val message: String, val fallbackUrl: String) : UiState
+    data class Error(
+        val message: String,
+        val fallbackUrl: String,
+        val dataSpace: PwaDataSpace
+    ) : UiState
 }

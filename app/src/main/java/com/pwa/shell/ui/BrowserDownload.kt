@@ -334,7 +334,10 @@ internal class WebDataDownloadBridge(
 }
 
 internal fun getWebDataDownloadSupportJs(capabilityToken: String): String {
-    val encodedToken = org.json.JSONObject.quote(capabilityToken)
+    return buildWebDataDownloadSupportJs(org.json.JSONObject.quote(capabilityToken))
+}
+
+internal fun buildWebDataDownloadSupportJs(encodedToken: String): String {
     return """
         (function() {
             if (window.__netnest_download_support_installed) return;
@@ -344,6 +347,31 @@ internal fun getWebDataDownloadSupportJs(capabilityToken: String): String {
             try { delete window.NetNestDownload; } catch (_) {}
             const token = $encodedToken;
             const pendingDownloads = new Map();
+            const objectUrlBlobs = new Map();
+
+            const originalCreateObjectURL = URL.createObjectURL;
+            const originalRevokeObjectURL = URL.revokeObjectURL;
+            if (typeof originalCreateObjectURL === "function") {
+                URL.createObjectURL = function(value) {
+                    const url = originalCreateObjectURL.apply(this, arguments);
+                    if (typeof Blob !== "undefined" && value instanceof Blob) {
+                        objectUrlBlobs.set(url, value);
+                    }
+                    return url;
+                };
+                URL.createObjectURL.toString = function() {
+                    return "function createObjectURL() { [native code] }";
+                };
+            }
+            if (typeof originalRevokeObjectURL === "function") {
+                URL.revokeObjectURL = function(url) {
+                    objectUrlBlobs.delete(String(url));
+                    return originalRevokeObjectURL.apply(this, arguments);
+                };
+                URL.revokeObjectURL.toString = function() {
+                    return "function revokeObjectURL() { [native code] }";
+                };
+            }
 
             function readBlobChunk(blob) {
                 if (typeof blob.arrayBuffer === "function") {
@@ -357,6 +385,27 @@ internal fun getWebDataDownloadSupportJs(capabilityToken: String): String {
                     };
                     reader.readAsArrayBuffer(blob);
                 });
+            }
+
+            function snapshotBlobUrl(url) {
+                return fetch(url)
+                    .then(function(response) {
+                        if (!response.ok) {
+                            throw new Error("无法读取网页生成的下载内容");
+                        }
+                        return response.blob();
+                    })
+                    .then(
+                        function(blob) { return { blob: blob, error: "" }; },
+                        function(error) {
+                            return {
+                                blob: null,
+                                error: error && error.message
+                                    ? error.message
+                                    : "无法读取网页生成的下载内容"
+                            };
+                        }
+                    );
             }
 
             async function startDownload(
@@ -377,9 +426,17 @@ internal fun getWebDataDownloadSupportJs(capabilityToken: String): String {
                     }
                     downloadUrl = pending ? pending.url : urlOrHandle;
                     if (isJavascriptHandle) pendingDownloads.delete(urlOrHandle);
-                    const response = await fetch(downloadUrl);
-                    if (!response.ok) throw new Error("无法读取网页生成的下载内容");
-                    const blob = await response.blob();
+                    let blob = pending ? pending.blob : null;
+                    if (!blob && pending && pending.snapshot) {
+                        const snapshot = await pending.snapshot;
+                        if (!snapshot.blob) throw new Error(snapshot.error);
+                        blob = snapshot.blob;
+                    }
+                    if (!blob) {
+                        const response = await fetch(downloadUrl);
+                        if (!response.ok) throw new Error("无法读取网页生成的下载内容");
+                        blob = await response.blob();
+                    }
                     sessionId = bridge.open(
                         token,
                         grantId,
@@ -415,10 +472,6 @@ internal fun getWebDataDownloadSupportJs(capabilityToken: String): String {
                         token,
                         error && error.message ? error.message : "网页下载失败"
                     );
-                } finally {
-                    if (downloadUrl.indexOf("blob:") === 0) {
-                        try { URL.revokeObjectURL(downloadUrl); } catch (_) {}
-                    }
                 }
             }
 
@@ -452,7 +505,16 @@ internal fun getWebDataDownloadSupportJs(capabilityToken: String): String {
                     typeof crypto.randomUUID === "function"
                     ? crypto.randomUUID()
                     : Date.now().toString(36) + Math.random().toString(36).substring(2);
-                pendingDownloads.set(requestId, { url: url });
+                const sourceBlob = url.indexOf("blob:") === 0
+                    ? objectUrlBlobs.get(url) || null
+                    : null;
+                pendingDownloads.set(requestId, {
+                    url: url,
+                    blob: sourceBlob,
+                    snapshot: url.indexOf("blob:") === 0 && !sourceBlob
+                        ? snapshotBlobUrl(url)
+                        : null
+                });
                 bridge.requestDownload(
                     token,
                     requestId,

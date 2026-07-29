@@ -10,6 +10,9 @@ import android.content.pm.PackageManager
 import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Message
 import android.util.Log
 import android.webkit.*
@@ -19,7 +22,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
@@ -114,17 +116,25 @@ class SecurityPolicyStore(initial: PwaEntity) {
 fun PwaWebViewScreen(
     pwa: PwaEntity,
     onBackToHome: () -> Unit,
+    modifier: Modifier = Modifier,
+    isActive: Boolean = true,
+    initialSavedState: Bundle? = null,
+    onWebViewChanged: (WebView?) -> Unit = {},
+    onSwitchBlockedChanged: (Boolean) -> Unit = {},
+    onAttentionChanged: (Boolean) -> Unit = {},
+    onRendererGone: (Long) -> Unit = {},
     onUpdatePwa: (PwaEntity) -> Unit = {},
     onCompatibilityFallbackUsed: (Long) -> Unit = {},
     onIsolationActivationAcknowledged: (Long) -> Unit = {},
     onWebViewDisposed: () -> Unit = {},
     notificationClickId: String? = null,
-    onNotificationClickConsumed: () -> Unit = {},
-    modifier: Modifier = Modifier
+    onNotificationClickConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val view = LocalView.current
-    val darkTheme = isSystemInDarkTheme()
+    val currentPwa by rememberUpdatedState(pwa)
+    val currentIsActive by rememberUpdatedState(isActive)
+    val currentOnRendererGone by rememberUpdatedState(onRendererGone)
     var webView: WebView? by remember { mutableStateOf(null) }
     var profileCookieManager: CookieManager? by remember { mutableStateOf(null) }
     var activeWebProfile by remember(pwa.id, pwa.webProfileId) {
@@ -135,7 +145,10 @@ fun PwaWebViewScreen(
     var blockedUrl by remember { mutableStateOf("") }
     var blockedLeakType by remember { mutableStateOf("") }
     var currentCallback by remember { mutableStateOf<((SecurityDecision) -> Unit)?>(null) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
     var pendingWebPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
+    var pendingWebPermissionResources by remember { mutableStateOf<List<String>>(emptyList()) }
+    var webPermissionLaunchInProgress by remember { mutableStateOf(false) }
     var pendingNotificationPermission by remember {
         mutableStateOf<PwaNotificationPermissionRequest?>(null)
     }
@@ -173,7 +186,10 @@ fun PwaWebViewScreen(
             }
         )
     }
-    LaunchedEffect(pwa) { securityPolicyStore.update(pwa) }
+    LaunchedEffect(pwa) {
+        securityPolicyStore.update(pwa)
+        notificationBridge.updatePwa(pwa)
+    }
     LaunchedEffect(
         activeWebProfile.mode,
         pwa.id,
@@ -191,7 +207,7 @@ fun PwaWebViewScreen(
                     showIsolationActivatedNotice = true
                 }
             }
-            PwaWebProfileMode.LEGACY_SHARED -> Unit
+            PwaWebProfileMode.SHARED -> Unit
         }
     }
 
@@ -317,7 +333,8 @@ fun PwaWebViewScreen(
             }
         }
     }
-    LaunchedEffect(pwa.useFullscreen) {
+    LaunchedEffect(isActive, pwa.useFullscreen) {
+        if (!isActive) return@LaunchedEffect
         val activity = context.findActivity()
         val window = activity?.window
         if (window != null) {
@@ -387,8 +404,10 @@ fun PwaWebViewScreen(
     val webPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
+        webPermissionLaunchInProgress = false
         val request = pendingWebPermissionRequest
         pendingWebPermissionRequest = null
+        pendingWebPermissionResources = emptyList()
         if (request == null) return@rememberLauncherForActivityResult
 
         val grantedResources = request.resources.filter { resource ->
@@ -402,6 +421,18 @@ fun PwaWebViewScreen(
             request.deny()
         } else {
             request.grant(grantedResources.toTypedArray())
+        }
+    }
+
+    LaunchedEffect(isActive, pendingWebPermissionRequest, pendingWebPermissionResources) {
+        if (
+            isActive &&
+            pendingWebPermissionRequest != null &&
+            pendingWebPermissionResources.isNotEmpty() &&
+            !webPermissionLaunchInProgress
+        ) {
+            webPermissionLaunchInProgress = true
+            webPermissionLauncher.launch(pendingWebPermissionResources.toTypedArray())
         }
     }
 
@@ -433,7 +464,7 @@ fun PwaWebViewScreen(
     }
 
     // System Back Button Handling
-    BackHandler {
+    BackHandler(enabled = isActive) {
         val wv = webView
         if (wv != null && wv.canGoBack()) {
             wv.goBack()
@@ -442,11 +473,11 @@ fun PwaWebViewScreen(
         }
     }
 
-    // Immersive status bar control
-    DisposableEffect(pwa) {
+    // Only the visible session owns process-global window chrome.
+    DisposableEffect(isActive, pwa.themeColor, pwa.useFullscreen) {
         val activity = context.findActivity()
         val window = activity?.window
-        if (window != null && !pwa.useFullscreen) {
+        if (isActive && window != null && !pwa.useFullscreen) {
             // Keep edge-to-edge layout false
             WindowCompat.setDecorFitsSystemWindows(window, false)
             
@@ -458,11 +489,32 @@ fun PwaWebViewScreen(
             val isLight = isColorLight(pwaColor)
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = isLight
         }
+        onDispose {}
+    }
 
+    val hasBlockingRequest =
+        showSecurityDialog ||
+            pendingWebPermissionRequest != null ||
+            pendingNotificationPermission != null ||
+            pendingSystemNotificationPermission != null ||
+            downloadQueue.isNotEmpty() ||
+            pendingLegacyDownload != null ||
+            uploadMessageCallback != null
+
+    LaunchedEffect(isActive, hasBlockingRequest) {
+        onSwitchBlockedChanged(isActive && hasBlockingRequest)
+        onAttentionChanged(!isActive && hasBlockingRequest)
+    }
+
+    // A session is destroyed only when the host removes it from the warm set.
+    DisposableEffect(pwa.id) {
         onDispose {
+            onSwitchBlockedChanged(false)
+            onAttentionChanged(false)
             profileCookieManager?.flush()
             pendingWebPermissionRequest?.deny()
             pendingWebPermissionRequest = null
+            pendingWebPermissionResources = emptyList()
             pendingNotificationPermission?.let {
                 notificationBridge.resolvePermission(
                     it.requestId,
@@ -497,23 +549,9 @@ fun PwaWebViewScreen(
                 destroy()
             }
             webView = null
+            onWebViewChanged(null)
             profileCookieManager = null
             onWebViewDisposed()
-            window?.let { w ->
-                // Restore default transparent system bars
-                w.statusBarColor = android.graphics.Color.TRANSPARENT
-                w.navigationBarColor = android.graphics.Color.TRANSPARENT
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    val attrs = w.attributes
-                    attrs.layoutInDisplayCutoutMode = 
-                        android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-                    w.attributes = attrs
-                }
-                val controller = WindowCompat.getInsetsController(w, view)
-                controller.isAppearanceLightStatusBars = !darkTheme
-                controller.isAppearanceLightNavigationBars = !darkTheme
-                controller.show(WindowInsetsCompat.Type.statusBars())
-            }
         }
     }
 
@@ -546,12 +584,26 @@ fun PwaWebViewScreen(
 
                     // Add Security Sandbox Javascript Interface Bridge
                     addJavascriptInterface(
-                        SecurityBridge(securityPolicyStore, bridgeCapabilityToken) { host, leakType, callback ->
-                            blockedUrl = host
-                            blockedLeakType = leakType
-                            currentCallback = callback
-                            showSecurityDialog = true
-                        },
+                        SecurityBridge(
+                            policyStore = securityPolicyStore,
+                            capabilityToken = bridgeCapabilityToken,
+                            onShowBlockDialog = { host, leakType, callback ->
+                                mainHandler.post {
+                                    blockedUrl = host
+                                    blockedLeakType = leakType
+                                    currentCallback = callback
+                                    showSecurityDialog = true
+                                }
+                            },
+                            onPromptExpired = { callback ->
+                                mainHandler.post {
+                                    if (currentCallback === callback) {
+                                        currentCallback = null
+                                        showSecurityDialog = false
+                                    }
+                                }
+                            }
+                        ),
                         "NetNestSecurity"
                     )
 
@@ -617,7 +669,7 @@ fun PwaWebViewScreen(
                                     !androidx.webkit.WebViewFeature.isFeatureSupported(
                                         androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT
                                     ) &&
-                                    isNotificationSourceAllowed(url, pwa.url)
+                                    isNotificationSourceAllowed(url, currentPwa.url)
                                 ) {
                                     view.evaluateJavascript(
                                         getPwaNotificationSupportJs(bridgeCapabilityToken),
@@ -647,14 +699,18 @@ fun PwaWebViewScreen(
                             }
 
                              // Dynamically update status bar color based on webpage theme color or body background
-                            if (view != null) {
-                                updateStatusBarFromWeb(view, pwa.useFullscreen)
+                            if (view != null && currentIsActive) {
+                                updateStatusBarFromWeb(view, currentPwa.useFullscreen)
                                 // Delayed check for SPA dynamic rendering/hydration
-                                view.postDelayed({ updateStatusBarFromWeb(view, pwa.useFullscreen) }, 500)
+                                view.postDelayed({
+                                    if (currentIsActive) {
+                                        updateStatusBarFromWeb(view, currentPwa.useFullscreen)
+                                    }
+                                }, 500)
                             }
 
                             // Dynamically inject Tencent vConsole in-app debugger if enabled
-                            if (pwa.useDevConsole) {
+                            if (currentPwa.useDevConsole) {
                                 val ctx = view?.context
                                 if (ctx != null) {
                                     val vConsoleJs = getAssetFileString(ctx, "vconsole.min.js")
@@ -697,6 +753,17 @@ fun PwaWebViewScreen(
                                 "WebViewError",
                                 "HTTP error ${errorResponse?.statusCode} for ${request?.url}: ${errorResponse?.reasonPhrase}"
                             )
+                        }
+
+                        override fun onRenderProcessGone(
+                            view: WebView?,
+                            detail: RenderProcessGoneDetail?
+                        ): Boolean {
+                            runCatching { view?.destroy() }
+                            webView = null
+                            onWebViewChanged(null)
+                            currentOnRendererGone(pwa.id)
+                            return true
                         }
 
                         override fun shouldOverrideUrlLoading(
@@ -838,8 +905,8 @@ fun PwaWebViewScreen(
                                 pendingWebPermissionRequest != null ||
                                 !WebSecurityPolicy.isTrustedUrl(
                                     request.origin.toString(),
-                                    pwa.url,
-                                    pwa.trustedDomains
+                                    currentPwa.url,
+                                    currentPwa.trustedDomains
                                 )
                             ) {
                                 request.deny()
@@ -866,13 +933,15 @@ fun PwaWebViewScreen(
                                 request.grant(knownResources.toTypedArray())
                             } else {
                                 pendingWebPermissionRequest = request
-                                webPermissionLauncher.launch(missingPermissions.toTypedArray())
+                                pendingWebPermissionResources = missingPermissions
                             }
                         }
 
                         override fun onPermissionRequestCanceled(request: PermissionRequest?) {
                             if (pendingWebPermissionRequest === request) {
                                 pendingWebPermissionRequest = null
+                                pendingWebPermissionResources = emptyList()
+                                webPermissionLaunchInProgress = false
                             }
                         }
 
@@ -921,8 +990,10 @@ fun PwaWebViewScreen(
                         }
                     }
 
-                    loadUrl(pwa.url)
+                    val restored = initialSavedState?.let { restoreState(it) != null } == true
+                    if (!restored) loadUrl(pwa.url)
                     webView = this
+                    onWebViewChanged(this)
                 }
             },
             modifier = if (pwa.useFullscreen) {
@@ -932,7 +1003,7 @@ fun PwaWebViewScreen(
             }
         )
 
-        if (activeWebProfile.mode == PwaWebProfileMode.COMPATIBILITY_SHARED) {
+        if (isActive && activeWebProfile.mode == PwaWebProfileMode.COMPATIBILITY_SHARED) {
             androidx.compose.material3.Surface(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -956,6 +1027,7 @@ fun PwaWebViewScreen(
         }
 
         if (
+            isActive &&
             showIsolationActivatedNotice &&
             !showSecurityDialog &&
             downloadQueue.isEmpty() &&
@@ -985,7 +1057,9 @@ fun PwaWebViewScreen(
             )
         }
 
-        downloadQueue.firstOrNull()?.takeIf { !showSecurityDialog }?.let { request ->
+        downloadQueue.firstOrNull()
+            ?.takeIf { isActive && !showSecurityDialog }
+            ?.let { request ->
             fun dismissDownload() {
                 downloadQueue.remove(request)
                 buildWebDataDownloadCancelScript(request)
@@ -1037,7 +1111,7 @@ fun PwaWebViewScreen(
         }
 
         pendingNotificationPermission
-            ?.takeIf { !showSecurityDialog && downloadQueue.isEmpty() }
+            ?.takeIf { isActive && !showSecurityDialog && downloadQueue.isEmpty() }
             ?.let { request ->
                 fun resolve(permission: PwaNotificationPermission, persist: Boolean) {
                     if (persist) {
@@ -1125,7 +1199,7 @@ fun PwaWebViewScreen(
             }
 
         // Privacy Security Sandbox Warning Dialog
-        if (showSecurityDialog) {
+        if (isActive && showSecurityDialog) {
             fun resolveSecurityDecision(decision: SecurityDecision) {
                 val callback = currentCallback
                 currentCallback = null
@@ -1567,7 +1641,13 @@ private fun injectSecuritySandbox(webView: WebView, pwa: PwaEntity, capabilityTo
 class SecurityBridge(
     private val policyStore: SecurityPolicyStore,
     capabilityToken: String,
-    private val onShowBlockDialog: (host: String, leakType: String, callback: (SecurityDecision) -> Unit) -> Unit
+    private val onShowBlockDialog: (
+        host: String,
+        leakType: String,
+        callback: (SecurityDecision) -> Unit
+    ) -> Unit,
+    private val onPromptExpired: (callback: (SecurityDecision) -> Unit) -> Unit = {},
+    private val promptTimeoutMillis: Long = 8_000L
 ) {
     private val dialogLock = Any()
     private val capabilityTokenBytes = capabilityToken.toByteArray(Charsets.UTF_8)
@@ -1619,21 +1699,13 @@ class SecurityBridge(
                 return if (cached == SecurityDecision.ALLOW_ONCE) "ALLOW" else "BLOCK"
             }
 
-            val decision = AtomicReference(SecurityDecision.BLOCK_ONCE)
-            val latch = java.util.concurrent.CountDownLatch(1)
-
-            onShowBlockDialog(host, leakType) { selected ->
-                decision.set(selected)
-                latch.countDown()
-            }
-
-            try {
-                latch.await(8, TimeUnit.SECONDS)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-            }
-
-            val selected = decision.get()
+            val selected = awaitSecurityDecision(
+                timeoutMillis = promptTimeoutMillis,
+                onShow = { callback ->
+                    onShowBlockDialog(host, leakType, callback)
+                },
+                onExpired = onPromptExpired
+            )
             return when (selected) {
                 SecurityDecision.TRUST_DOMAIN,
                 SecurityDecision.ALLOW_ONCE -> "ALLOW"
@@ -1649,6 +1721,28 @@ class SecurityBridge(
             token.toByteArray(Charsets.UTF_8)
         )
     }
+}
+
+internal fun awaitSecurityDecision(
+    timeoutMillis: Long,
+    onShow: (callback: (SecurityDecision) -> Unit) -> Unit,
+    onExpired: (callback: (SecurityDecision) -> Unit) -> Unit
+): SecurityDecision {
+    val decision = AtomicReference(SecurityDecision.BLOCK_ONCE)
+    val latch = java.util.concurrent.CountDownLatch(1)
+    val resolvePrompt: (SecurityDecision) -> Unit = { selected ->
+        decision.set(selected)
+        latch.countDown()
+    }
+    onShow(resolvePrompt)
+    val resolved = try {
+        latch.await(timeoutMillis, TimeUnit.MILLISECONDS)
+    } catch (error: InterruptedException) {
+        Thread.currentThread().interrupt()
+        false
+    }
+    if (!resolved) onExpired(resolvePrompt)
+    return decision.get()
 }
 
 private fun androidPermissionForWebResource(resource: String): String? {
